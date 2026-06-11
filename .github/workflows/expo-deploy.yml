@@ -1,0 +1,77 @@
+name: Expo Deployment
+
+on:
+  workflow_call:
+    inputs:
+      branch_name:
+        required: true
+        type: string
+        description: "The branch invoking the build"
+      project_root:
+        required: false
+        type: string
+        default: "."
+        description: "Directory path if Expo isn't in root folder"
+    secrets:
+      EXPO_TOKEN:
+        required: true
+        description: "The EAS token used to authenticate with Expo CLI"
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.project_root }}
+    steps:
+      - name: Checkout Application Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: '${{ inputs.project_root }}/package-lock.json'
+
+      - name: Install Application Dependencies
+        run: npm ci
+
+      - name: Run Lint
+        run: npm run lint --if-present
+
+      - name: Run Tests
+        run: npm test --if-present
+
+  eas-deploy:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.project_root }}
+    steps:
+      - name: Checkout Application Code
+        uses: actions/checkout@v4
+
+      - name: Setup Expo & EAS
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install Application Dependencies
+        run: npm ci
+
+      # Dynamic Environment Mapping Control
+      - name: Determine Target Profile Environment
+        id: select-env
+        run: |
+          if [[ "${{ inputs.branch_name }}" == "refs/heads/release" ]]; then
+            echo "profile=production" >> $GITHUB_OUTPUT
+          else
+            echo "profile=preview" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and Publish to EAS
+        run: |
+          eas build --platform all --profile ${{ steps.select-env.outputs.profile }} --non-interactive
