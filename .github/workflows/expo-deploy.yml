@@ -56,7 +56,8 @@ jobs:
       - name: Setup Expo & EAS
         uses: expo/expo-github-action@v8
         with:
-          expo-version: 20.1.0
+          expo-version: 56.1.14
+          eas-version: 20.0.1
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Install Application Dependencies
