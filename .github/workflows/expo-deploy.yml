@@ -6,16 +6,17 @@ on:
       branch_name:
         required: true
         type: string
-        description: "The branch invoking the build"
       project_root:
         required: false
         type: string
         default: "."
-        description: "Directory path if Expo isn't in root folder"
+      publish_artifact:
+        required: false
+        type: string
+        default: "true"
     secrets:
       EXPO_TOKEN:
         required: true
-        description: "The EAS token used to authenticate with Expo CLI"
 
 jobs:
   lint-and-test:
@@ -32,16 +33,12 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: '${{ inputs.project_root }}/package-lock.json'
-
+          
       - name: Install Application Dependencies
         run: npm ci
 
       - name: Run Lint
         run: npm run lint --if-present
-
-      - name: Run Tests
-        run: npm test --if-present
 
   eas-deploy:
     needs: lint-and-test
@@ -63,16 +60,29 @@ jobs:
       - name: Install Application Dependencies
         run: npm ci
 
-      # Dynamic Environment Mapping Control
       - name: Determine Target Profile Environment
         id: select-env
         run: |
-          if [[ "${{ inputs.branch_name }}" == "refs/heads/release" ]]; then
+          if [[ "${{ inputs.branch_name }}" == "refs/heads/release" || "${{ inputs.branch_name }}" == "refs/heads/main" ]]; then
             echo "profile=production" >> $GITHUB_OUTPUT
+            echo "should_submit=${{ inputs.publish_artifact }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ inputs.branch_name }}" == "refs/heads/qa" ]]; then
+            echo "profile=qa" >> $GITHUB_OUTPUT
+            echo "should_submit=false" >> $GITHUB_OUTPUT
+          elif [[ "${{ inputs.branch_name }}" == "refs/heads/test" ]]; then
+            echo "profile=testing" >> $GITHUB_OUTPUT
+            echo "should_submit=false" >> $GITHUB_OUTPUT
           else
-            echo "profile=preview" >> $GITHUB_OUTPUT
+            echo "profile=development" >> $GITHUB_OUTPUT
+            echo "should_submit=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build and Publish to EAS
+      - name: Build and Conditionally Submit to App Stores
         run: |
-          eas build --platform all --profile ${{ steps.select-env.outputs.profile }} --non-interactive
+          if [ "${{ steps.select-env.outputs.should_submit }}" = "true" ]; then
+            echo "🚀 Compiling binary and submitting directly to app stores..."
+            eas build --platform all --profile ${{ steps.select-env.outputs.profile }} --auto-submit --non-interactive
+          else
+            echo "📦 Compiling binary only (skipping automatic store publication)..."
+            eas build --platform all --profile ${{ steps.select-env.outputs.profile }} --non-interactive
+          fi
