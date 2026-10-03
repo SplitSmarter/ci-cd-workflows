@@ -1,0 +1,274 @@
+name: Python Docker Deploy
+
+on:
+  workflow_call:
+    inputs:
+      branch_name:
+        required: true
+        type: string
+      service_name:
+        required: true
+        type: string
+      project_root:
+        required: false
+        type: string
+        default: "."
+    secrets:
+      GHCR_USERNAME:
+        required: true
+      GHCR_TOKEN:
+        required: true
+
+jobs:
+  resolve-target:
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.resolve.outputs.env }}
+      service_name: ${{ steps.resolve.outputs.service_name }}
+      compose_service: ${{ steps.resolve.outputs.compose_service }}
+      image_name: ${{ steps.resolve.outputs.image_name }}
+      container_port: ${{ steps.resolve.outputs.container_port }}
+      health_path: ${{ steps.resolve.outputs.health_path }}
+      deploy_path: ${{ steps.resolve.outputs.deploy_path }}
+      registry: ${{ steps.resolve.outputs.registry }}
+      appsecret_name: ${{ steps.resolve.outputs.appsecret_name }}
+      instance_names: ${{ steps.resolve.outputs.instance_names }}
+      target_ids: ${{ steps.resolve.outputs.target_ids }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: SplitSmarter/ci-cd-workflows
+          ref: main
+          path: ci-cd-workflows
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Resolve targets
+        id: resolve
+        working-directory: ci-cd-workflows
+        run: |
+          python deploy/scripts/resolve_target.py \
+            --inventory deploy/instances.yml \
+            --branch-name "${{ inputs.branch_name }}" \
+            --service-name "${{ inputs.service_name }}" \
+            --github-output
+        # Always pin reusable workflow helpers to ci-cd-workflows@main so app callers stay stable.
+
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.project_root }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ inputs.project_root }}/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          if [[ -f requirements.txt ]]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Lint
+        run: |
+          if [[ -f requirements.txt ]] && pip show ruff >/dev/null 2>&1; then
+            ruff check .
+          elif command -v ruff >/dev/null 2>&1; then
+            ruff check .
+          else
+            echo "No ruff configured; skipping lint"
+          fi
+
+      - name: Test
+        run: |
+          if [[ -d tests ]] && pip show pytest >/dev/null 2>&1; then
+            pytest -q
+          else
+            echo "No pytest suite detected; skipping tests"
+          fi
+
+  build-and-push:
+    needs: [resolve-target, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.meta.outputs.image_ref }}
+      image_sha: ${{ steps.meta.outputs.image_sha }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Set image tags
+        id: meta
+        run: |
+          SHA_SHORT="${GITHUB_SHA::12}"
+          REGISTRY="${{ needs.resolve-target.outputs.registry }}"
+          IMAGE_NAME="${{ needs.resolve-target.outputs.image_name }}"
+          ENV_NAME="${{ needs.resolve-target.outputs.env }}"
+          IMAGE_SHA="${REGISTRY}/${IMAGE_NAME}:${SHA_SHORT}"
+          IMAGE_ENV="${REGISTRY}/${IMAGE_NAME}:${ENV_NAME}"
+          echo "image_sha=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_env=${IMAGE_ENV}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.project_root }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_sha }}
+            ${{ needs.resolve-target.outputs.registry }}/${{ needs.resolve-target.outputs.image_name }}:${{ needs.resolve-target.outputs.env }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  preflight-secrets:
+    needs: [resolve-target, build-and-push]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        instance_name: ${{ fromJson(needs.resolve-target.outputs.instance_names) }}
+    env:
+      DEVELOPMENT_INSTANCE_1: ${{ vars.DEVELOPMENT_INSTANCE_1 }}
+      QA_INSTANCE_1: ${{ vars.QA_INSTANCE_1 }}
+      TESTING_INSTANCE_1: ${{ vars.TESTING_INSTANCE_1 }}
+      PRODUCTION_INSTANCE_1: ${{ vars.PRODUCTION_INSTANCE_1 }}
+      PRODUCTION_INSTANCE_2: ${{ vars.PRODUCTION_INSTANCE_2 }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: SplitSmarter/ci-cd-workflows
+          ref: main
+          path: ci-cd-workflows
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Validate host env keys
+        working-directory: ci-cd-workflows
+        run: |
+          set -euo pipefail
+          chmod +x deploy/scripts/*.sh deploy/droplet/*.sh
+          INSTANCE_NAME="${{ matrix.instance_name }}"
+          DEPLOY_PATH="${{ needs.resolve-target.outputs.deploy_path }}"
+          SERVICE="${{ needs.resolve-target.outputs.service_name }}"
+          ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
+          # shellcheck source=deploy/scripts/parse_kv.sh
+          source deploy/scripts/parse_kv.sh
+          parse_kv_file /tmp/instance.env
+          : "${SSH_HOST:?}"
+          : "${SSH_USER:=deploy}"
+          : "${SSH_PORT:=22}"
+          : "${SSH_KEY:?}"
+          KEY_FILE="$(mktemp)"
+          printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          SSH_OPTS=(-i "$KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
+
+          SERVICE_NAME="${{ needs.resolve-target.outputs.service_name }}"
+          KEYS=$(python -c "import yaml; from pathlib import Path; data=yaml.safe_load(Path('deploy/required-secrets.yml').read_text()); print(' '.join(data.get('${SERVICE_NAME}', [])))")
+
+          if ! ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "export DEPLOY_PATH='${DEPLOY_PATH}'; test -x '${DEPLOY_PATH}/scripts/validate-env.sh' && '${DEPLOY_PATH}/scripts/validate-env.sh' ${KEYS}"; then
+            echo "Preflight failed for ${INSTANCE_NAME}."
+            echo "Run sync-host-secrets for env=${{ needs.resolve-target.outputs.env }} service=${SERVICE}."
+            exit 1
+          fi
+          rm -f "$KEY_FILE"
+
+  deploy:
+    needs: [resolve-target, build-and-push, preflight-secrets]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        instance_name: ${{ fromJson(needs.resolve-target.outputs.instance_names) }}
+    env:
+      DEVELOPMENT_INSTANCE_1: ${{ vars.DEVELOPMENT_INSTANCE_1 }}
+      QA_INSTANCE_1: ${{ vars.QA_INSTANCE_1 }}
+      TESTING_INSTANCE_1: ${{ vars.TESTING_INSTANCE_1 }}
+      PRODUCTION_INSTANCE_1: ${{ vars.PRODUCTION_INSTANCE_1 }}
+      PRODUCTION_INSTANCE_2: ${{ vars.PRODUCTION_INSTANCE_2 }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: SplitSmarter/ci-cd-workflows
+          ref: main
+          path: ci-cd-workflows
+
+      - name: Deploy service
+        working-directory: ci-cd-workflows
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+          chmod +x deploy/scripts/*.sh deploy/droplet/*.sh
+          INSTANCE_NAME="${{ matrix.instance_name }}"
+          DEPLOY_PATH="${{ needs.resolve-target.outputs.deploy_path }}"
+          SERVICE="${{ needs.resolve-target.outputs.compose_service }}"
+          IMAGE="${{ needs.build-and-push.outputs.image_ref }}"
+          PORT="${{ needs.resolve-target.outputs.container_port }}"
+          HEALTH="${{ needs.resolve-target.outputs.health_path }}"
+
+          ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
+          # shellcheck source=deploy/scripts/parse_kv.sh
+          source deploy/scripts/parse_kv.sh
+          parse_kv_file /tmp/instance.env
+          : "${SSH_HOST:?}"
+          : "${SSH_USER:=deploy}"
+          : "${SSH_PORT:=22}"
+          : "${SSH_KEY:?}"
+          KEY_FILE="$(mktemp)"
+          printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          SSH_OPTS=(-i "$KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
+
+          scp "${SSH_OPTS[@]}" deploy/droplet/deploy-service.sh deploy/droplet/docker-compose.yml \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/" 2>/dev/null || true
+          scp "${SSH_OPTS[@]}" deploy/droplet/deploy-service.sh \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/deploy-service.sh"
+          scp "${SSH_OPTS[@]}" deploy/droplet/docker-compose.yml \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/docker-compose.yml"
+
+          ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "export DEPLOY_PATH='${DEPLOY_PATH}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN='${GHCR_TOKEN}'; \
+             chmod +x '${DEPLOY_PATH}/scripts/deploy-service.sh'; \
+             '${DEPLOY_PATH}/scripts/deploy-service.sh' '${SERVICE}' '${IMAGE}' '${PORT}' '${HEALTH}'"
+
+          rm -f "$KEY_FILE"

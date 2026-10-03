@@ -1,0 +1,53 @@
+defaults:
+  ssh_user: deploy
+  deploy_path: /opt/splitsmarter
+  registry: ghcr.io/splitsmarter
+
+# branch → env key (same profiles as Expo)
+branch_map:
+  refs/heads/main: production
+  refs/heads/release: production
+  refs/heads/qa: qa
+  refs/heads/test: testing
+  # everything else → development
+
+# GitHub Variable naming: {ENV}_{TYPE}_{REST}
+#   INSTANCE → DEVELOPMENT_INSTANCE_1
+#   APPSECRET → DEVELOPMENT_APPSECRET_MAILSERVICE (hyphens stripped from service name)
+instances:
+  development:
+    targets:
+      - id: 1
+    services:
+      mail-service:
+        compose_service: mail-service
+        image_name: mail-service
+        container_port: 8083
+        health_path: /health
+  qa:
+    targets:
+      - id: 1
+    services:
+      mail-service:
+        compose_service: mail-service
+        image_name: mail-service
+        container_port: 8083
+        health_path: /health
+  testing:
+    targets:
+      - id: 1
+    services:
+      mail-service:
+        compose_service: mail-service
+        image_name: mail-service
+        container_port: 8083
+        health_path: /health
+  production:
+    targets:
+      - id: 1
+    services:
+      mail-service:
+        compose_service: mail-service
+        image_name: mail-service
+        container_port: 8083
+        health_path: /health
