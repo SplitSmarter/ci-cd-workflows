@@ -70,9 +70,11 @@ SSH_USER=deploy
 SSH_PORT=22
 DEPLOY_PATH=/opt/splitsmarter
 SSH_KEY=-----BEGIN OPENSSH PRIVATE KEY-----
-...
+...full PEM with real newlines, no backslashes, no passphrase...
 -----END OPENSSH PRIVATE KEY-----
 ```
+
+Use an unencrypted key (`ssh-keygen -N ""`). Paste the PEM with real newlines in the GitHub Variable UI. Do not wrap lines with `\`.
 
 **`DEVELOPMENT_APPSECRET_MAILSERVICE`**
 
