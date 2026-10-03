@@ -42,8 +42,14 @@ mkdir -p "${ROOT}/scripts"
 cp -f "${SCRIPT_DIR}/deploy-service.sh" "${ROOT}/scripts/"
 cp -f "${SCRIPT_DIR}/sync-env.sh" "${ROOT}/scripts/"
 cp -f "${SCRIPT_DIR}/validate-env.sh" "${ROOT}/scripts/"
+cp -f "${SCRIPT_DIR}/check-host.sh" "${ROOT}/scripts/"
 cp -f "${SCRIPT_DIR}/docker-compose.yml" "${ROOT}/docker-compose.yml"
 chmod 755 "${ROOT}/scripts/"*.sh
+
+# Fail fast if docker is still unavailable after install
+command -v docker >/dev/null 2>&1 || { echo "ERROR: docker missing after install" >&2; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "ERROR: docker compose plugin missing after install" >&2; exit 1; }
+systemctl is-active --quiet docker || { echo "ERROR: docker service is not active" >&2; exit 1; }
 
 if [[ ! -f "${ROOT}/.env" ]]; then
   umask 077

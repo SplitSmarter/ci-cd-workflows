@@ -8,6 +8,13 @@ ROOT="${DEPLOY_PATH:-/opt/splitsmarter}"
 ENV_FILE="${ROOT}/.env"
 failed=0
 
+if [[ "$#" -eq 0 ]]; then
+  echo "ERROR: validate-env.sh requires at least one KEY" >&2
+  exit 2
+fi
+
+echo "==> validating ${#} required keys in ${ENV_FILE}"
+
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "missing_env_file"
   echo "ERROR: $ENV_FILE does not exist. Run sync-host-secrets first." >&2
@@ -28,4 +35,4 @@ if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
 
-echo "ok"
+echo "ok env keys present"

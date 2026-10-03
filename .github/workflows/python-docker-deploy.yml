@@ -178,7 +178,7 @@ jobs:
       - name: Install PyYAML
         run: pip install pyyaml
 
-      - name: Validate host env keys
+      - name: Validate host env keys + docker
         working-directory: ci-cd-workflows
         run: |
           set -euo pipefail
@@ -186,29 +186,42 @@ jobs:
           INSTANCE_NAME="${{ matrix.instance_name }}"
           DEPLOY_PATH="${{ needs.resolve-target.outputs.deploy_path }}"
           SERVICE="${{ needs.resolve-target.outputs.service_name }}"
-          ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
-          # shellcheck source=deploy/scripts/parse_kv.sh
-          source deploy/scripts/parse_kv.sh
-          parse_kv_file /tmp/instance.env
-          : "${SSH_HOST:?}"
-          : "${SSH_USER:=deploy}"
-          : "${SSH_PORT:=22}"
-          : "${SSH_KEY:?}"
-          KEY_FILE="$(mktemp)"
-          printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
-          chmod 600 "$KEY_FILE"
-          SSH_OPTS=(-i "$KEY_FILE" -o Port="$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
-
           SERVICE_NAME="${{ needs.resolve-target.outputs.service_name }}"
-          KEYS=$(python -c "import yaml; from pathlib import Path; data=yaml.safe_load(Path('deploy/required-secrets.yml').read_text()); print(' '.join(data.get('${SERVICE_NAME}', [])))")
 
+          ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
+          # shellcheck source=deploy/scripts/prepare_ssh.sh
+          source deploy/scripts/prepare_ssh.sh
+          prepare_ssh /tmp/instance.env
+          prepare_ssh_verify_connectivity
+
+          echo "==> ensure check-host + validate-env on host"
+          remote_mkdir_deploy "$DEPLOY_PATH"
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/check-host.sh \
+            deploy/droplet/validate-env.sh \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/" \
+            || { echo "ERROR: failed to copy preflight scripts to host" >&2; exit 1; }
+          ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "chmod +x '${DEPLOY_PATH}/scripts/check-host.sh' '${DEPLOY_PATH}/scripts/validate-env.sh'"
+
+          KEYS=$(python -c "import yaml; from pathlib import Path; data=yaml.safe_load(Path('deploy/required-secrets.yml').read_text()); print(' '.join(data.get('${SERVICE_NAME}', [])))")
+          [[ -n "${KEYS// }" ]] || { echo "ERROR: no required keys for ${SERVICE_NAME}" >&2; exit 1; }
+
+          echo "==> validate required env keys"
           if ! ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
-            "export DEPLOY_PATH='${DEPLOY_PATH}'; test -x '${DEPLOY_PATH}/scripts/validate-env.sh' && '${DEPLOY_PATH}/scripts/validate-env.sh' ${KEYS}"; then
-            echo "Preflight failed for ${INSTANCE_NAME}."
-            echo "Run sync-host-secrets for env=${{ needs.resolve-target.outputs.env }} service=${SERVICE}."
+            "export DEPLOY_PATH='${DEPLOY_PATH}'; '${DEPLOY_PATH}/scripts/validate-env.sh' ${KEYS}"; then
+            echo "ERROR: Preflight secrets failed for ${INSTANCE_NAME}." >&2
+            echo "Run sync-host-secrets for env=${{ needs.resolve-target.outputs.env }} service=${SERVICE}." >&2
             exit 1
           fi
-          rm -f "$KEY_FILE"
+
+          echo "==> host readiness (docker)"
+          if ! remote_check_host "$DEPLOY_PATH" --require-env; then
+            echo "ERROR: Preflight host checks failed for ${INSTANCE_NAME}." >&2
+            echo "On the droplet as root, run deploy/droplet/bootstrap.sh (installs Docker, docker group, /opt/splitsmarter)." >&2
+            exit 1
+          fi
+          echo "ok preflight ${INSTANCE_NAME}"
 
   deploy:
     needs: [resolve-target, build-and-push, preflight-secrets]
@@ -247,28 +260,29 @@ jobs:
           HEALTH="${{ needs.resolve-target.outputs.health_path }}"
 
           ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
-          # shellcheck source=deploy/scripts/parse_kv.sh
-          source deploy/scripts/parse_kv.sh
-          parse_kv_file /tmp/instance.env
-          : "${SSH_HOST:?}"
-          : "${SSH_USER:=deploy}"
-          : "${SSH_PORT:=22}"
-          : "${SSH_KEY:?}"
-          KEY_FILE="$(mktemp)"
-          printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
-          chmod 600 "$KEY_FILE"
-          SSH_OPTS=(-i "$KEY_FILE" -o Port="$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
+          # shellcheck source=deploy/scripts/prepare_ssh.sh
+          source deploy/scripts/prepare_ssh.sh
+          prepare_ssh /tmp/instance.env
+          prepare_ssh_verify_connectivity
+          remote_check_host "$DEPLOY_PATH" --require-env
 
-          scp "${SSH_OPTS[@]}" deploy/droplet/deploy-service.sh deploy/droplet/docker-compose.yml \
-            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/" 2>/dev/null || true
-          scp "${SSH_OPTS[@]}" deploy/droplet/deploy-service.sh \
-            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/deploy-service.sh"
-          scp "${SSH_OPTS[@]}" deploy/droplet/docker-compose.yml \
-            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/docker-compose.yml"
+          echo "==> copy deploy artifacts"
+          remote_mkdir_deploy "$DEPLOY_PATH"
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/deploy-service.sh \
+            deploy/droplet/check-host.sh \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/" \
+            || { echo "ERROR: scp scripts failed" >&2; exit 1; }
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/docker-compose.yml \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/docker-compose.yml" \
+            || { echo "ERROR: scp docker-compose.yml failed" >&2; exit 1; }
 
+          echo "==> remote deploy ${SERVICE} ${IMAGE}"
           ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
             "export DEPLOY_PATH='${DEPLOY_PATH}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN='${GHCR_TOKEN}'; \
-             chmod +x '${DEPLOY_PATH}/scripts/deploy-service.sh'; \
-             '${DEPLOY_PATH}/scripts/deploy-service.sh' '${SERVICE}' '${IMAGE}' '${PORT}' '${HEALTH}'"
+             chmod +x '${DEPLOY_PATH}/scripts/deploy-service.sh' '${DEPLOY_PATH}/scripts/check-host.sh'; \
+             '${DEPLOY_PATH}/scripts/deploy-service.sh' '${SERVICE}' '${IMAGE}' '${PORT}' '${HEALTH}'" \
+            || { echo "ERROR: deploy-service.sh failed for ${INSTANCE_NAME}" >&2; exit 1; }
 
-          rm -f "$KEY_FILE"
+          echo "ok deployed ${SERVICE} to ${INSTANCE_NAME}"
