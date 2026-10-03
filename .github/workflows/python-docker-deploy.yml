@@ -104,9 +104,9 @@ jobs:
   build-and-push:
     needs: [resolve-target, ci]
     runs-on: ubuntu-latest
+    # Image push uses secrets.GHCR_TOKEN (PAT), not GITHUB_TOKEN — no packages:write needed.
     permissions:
       contents: read
-      packages: write
     outputs:
       image_ref: ${{ steps.meta.outputs.image_ref }}
       image_sha: ${{ steps.meta.outputs.image_sha }}
