@@ -23,7 +23,7 @@ KEY_FILE="$(mktemp)"
 printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
 
-SSH_OPTS=(-i "$KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
+SSH_OPTS=(-i "$KEY_FILE" -o Port="$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
 
 cleanup() { rm -f "$KEY_FILE"; }
 trap cleanup EXIT

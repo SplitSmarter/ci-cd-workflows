@@ -197,7 +197,7 @@ jobs:
           KEY_FILE="$(mktemp)"
           printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
-          SSH_OPTS=(-i "$KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
+          SSH_OPTS=(-i "$KEY_FILE" -o Port="$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
 
           SERVICE_NAME="${{ needs.resolve-target.outputs.service_name }}"
           KEYS=$(python -c "import yaml; from pathlib import Path; data=yaml.safe_load(Path('deploy/required-secrets.yml').read_text()); print(' '.join(data.get('${SERVICE_NAME}', [])))")
@@ -257,7 +257,7 @@ jobs:
           KEY_FILE="$(mktemp)"
           printf '%s\n' "$SSH_KEY" > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
-          SSH_OPTS=(-i "$KEY_FILE" -p "$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
+          SSH_OPTS=(-i "$KEY_FILE" -o Port="$SSH_PORT" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_deploy)
 
           scp "${SSH_OPTS[@]}" deploy/droplet/deploy-service.sh deploy/droplet/docker-compose.yml \
             "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/" 2>/dev/null || true
