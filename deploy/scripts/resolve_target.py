@@ -103,7 +103,10 @@ def main() -> int:
         "image_name": service.get("image_name", args.service_name),
         "container_port": str(service.get("container_port", 8083)),
         "health_path": service.get("health_path", "/health"),
+        # Public nginx path prefix (e.g. /mail). Empty = skip edge traffic check.
+        "edge_path": str(service.get("edge_path") or ""),
         "deploy_path": defaults.get("deploy_path", "/opt/splitsmarter"),
+
         "registry": defaults.get("registry", "ghcr.io/splitsmarter"),
         "appsecret_name": appsec,
         "target_ids": json.dumps(target_ids),

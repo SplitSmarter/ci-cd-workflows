@@ -29,6 +29,7 @@ jobs:
       image_name: ${{ steps.resolve.outputs.image_name }}
       container_port: ${{ steps.resolve.outputs.container_port }}
       health_path: ${{ steps.resolve.outputs.health_path }}
+      edge_path: ${{ steps.resolve.outputs.edge_path }}
       deploy_path: ${{ steps.resolve.outputs.deploy_path }}
       registry: ${{ steps.resolve.outputs.registry }}
       appsecret_name: ${{ steps.resolve.outputs.appsecret_name }}
@@ -212,10 +213,16 @@ jobs:
             exit 1
           fi
 
-          echo "==> host readiness (docker) + secrets file"
-          if ! remote_check_host "$DEPLOY_PATH" --require-env "$SERVICE_NAME"; then
+          EDGE_PATH="${{ needs.resolve-target.outputs.edge_path }}"
+          CHECK_FLAGS=(--require-env "$SERVICE_NAME")
+          if [[ -n "$EDGE_PATH" ]]; then
+            CHECK_FLAGS+=(--require-edge "$EDGE_PATH")
+          fi
+          echo "==> host readiness (docker + secrets + nginx edge)"
+          if ! remote_check_host "$DEPLOY_PATH" "${CHECK_FLAGS[@]}"; then
             echo "ERROR: Preflight host checks failed for INSTANCE_NAME=${INSTANCE_NAME}." >&2
-            echo "On the droplet as root, run deploy/droplet/bootstrap.sh (installs Docker, docker group, /opt/splitsmarter)." >&2
+            echo "On the droplet as root: copy deploy/droplet/ and run bootstrap.sh (Docker + nginx + UFW)." >&2
+            echo "Or refresh edge only: sudo bash ensure-edge.sh" >&2
             exit 1
           fi
           echo "ok preflight INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME}"
@@ -256,14 +263,19 @@ jobs:
           IMAGE="${{ needs.build-and-push.outputs.image_ref }}"
           PORT="${{ needs.resolve-target.outputs.container_port }}"
           HEALTH="${{ needs.resolve-target.outputs.health_path }}"
-          echo "==> deploy INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME} IMAGE=${IMAGE}"
+          EDGE_PATH="${{ needs.resolve-target.outputs.edge_path }}"
+          echo "==> deploy INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME} IMAGE=${IMAGE} EDGE_PATH=${EDGE_PATH}"
 
           ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
           # shellcheck source=deploy/scripts/prepare_ssh.sh
           source deploy/scripts/prepare_ssh.sh
           prepare_ssh /tmp/instance.env
           prepare_ssh_verify_connectivity
-          remote_check_host "$DEPLOY_PATH" --require-env "$SERVICE_NAME"
+          CHECK_FLAGS=(--require-env "$SERVICE_NAME")
+          if [[ -n "$EDGE_PATH" ]]; then
+            CHECK_FLAGS+=(--require-edge "$EDGE_PATH")
+          fi
+          remote_check_host "$DEPLOY_PATH" "${CHECK_FLAGS[@]}"
 
           echo "==> copy deploy artifacts"
           remote_mkdir_deploy "$DEPLOY_PATH"
@@ -280,9 +292,9 @@ jobs:
 
           echo "==> remote deploy compose_service=${SERVICE} image=${IMAGE}"
           ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
-            "export DEPLOY_PATH='${DEPLOY_PATH}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN='${GHCR_TOKEN}'; \
+            "export DEPLOY_PATH='${DEPLOY_PATH}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN='${GHCR_TOKEN}' EDGE_PATH='${EDGE_PATH}'; \
              chmod +x '${DEPLOY_PATH}/scripts/deploy-service.sh' '${DEPLOY_PATH}/scripts/check-host.sh' '${DEPLOY_PATH}/scripts/validate-env.sh'; \
-             '${DEPLOY_PATH}/scripts/deploy-service.sh' '${SERVICE}' '${IMAGE}' '${PORT}' '${HEALTH}'" \
+             '${DEPLOY_PATH}/scripts/deploy-service.sh' '${SERVICE}' '${IMAGE}' '${PORT}' '${HEALTH}' '${EDGE_PATH}'" \
             || { echo "ERROR: deploy-service.sh failed for INSTANCE_NAME=${INSTANCE_NAME}" >&2; exit 1; }
 
           echo "ok deployed SERVICE_NAME=${SERVICE_NAME} to INSTANCE_NAME=${INSTANCE_NAME}"

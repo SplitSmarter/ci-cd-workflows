@@ -2,15 +2,18 @@
 set -euo pipefail
 # Fail-fast host readiness checks for deploy user.
 # Usage:
-#   check-host.sh [--require-env <service_name>] [--require-scripts]
+#   check-host.sh [--require-env <service_name>] [--require-scripts] [--require-edge <path>]
 #
 # --require-env mail-service  → require env/mail-service.env present and non-empty
+# --require-edge /mail        → nginx active + soft UFW 80 check (traffic curl is in deploy-service)
 # Exit non-zero with a clear ERROR line on the first failed check.
 
 ROOT="${DEPLOY_PATH:-/opt/splitsmarter}"
 REQUIRE_ENV=0
 REQUIRE_SCRIPTS=0
+REQUIRE_EDGE=0
 SERVICE_NAME=""
+EDGE_PATH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -25,6 +28,14 @@ while [[ $# -gt 0 ]]; do
     --require-scripts)
       REQUIRE_SCRIPTS=1
       shift
+      ;;
+    --require-edge)
+      REQUIRE_EDGE=1
+      shift
+      if [[ $# -gt 0 && "$1" != --* ]]; then
+        EDGE_PATH="$1"
+        shift
+      fi
       ;;
     *)
       echo "ERROR: unknown argument: $1" >&2
@@ -88,6 +99,30 @@ if [[ -f "${ROOT}/docker-compose.yml" ]]; then
   echo "found ${ROOT}/docker-compose.yml"
 else
   echo "WARN: ${ROOT}/docker-compose.yml not present yet (ok before first deploy copy)"
+fi
+
+if [[ "$REQUIRE_EDGE" -eq 1 ]]; then
+  [[ -n "$EDGE_PATH" ]] || fail "--require-edge needs a path (e.g. --require-edge /mail)"
+  [[ "$EDGE_PATH" == /* ]] || EDGE_PATH="/${EDGE_PATH}"
+  EDGE_PATH="${EDGE_PATH%/}"
+  step "nginx edge path ${EDGE_PATH}"
+  if systemctl is-active --quiet nginx 2>/dev/null; then
+    echo "nginx is active"
+  else
+    fail "nginx is not active. On the host as root: copy deploy/droplet/ and run sudo bash ensure-edge.sh"
+  fi
+  # Soft check: UFW status often needs root; warn if we cannot read it
+  if command -v ufw >/dev/null 2>&1; then
+    if ufw status 2>/dev/null | grep -qE 'Status: active'; then
+      if ufw status 2>/dev/null | grep -qE '80/tcp'; then
+        echo "ufw allows 80/tcp (or from specific sources)"
+      else
+        echo "WARN: ufw active but no 80/tcp rule visible (run ensure-edge.sh as root if needed)"
+      fi
+    else
+      echo "WARN: cannot read ufw status as $(id -un) (ok if DO Cloud Firewall enforces 80)"
+    fi
+  fi
 fi
 
 echo "ok host checks passed"

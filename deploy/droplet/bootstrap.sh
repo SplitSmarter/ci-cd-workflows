@@ -3,17 +3,18 @@ set -euo pipefail
 # Startup step 1 of 2 (host): run once as root on a new Droplet (or via cloud-init).
 #
 # Order:
-#   1) bootstrap.sh  → Docker, deploy user, dirs, ownership, firewall
+#   1) bootstrap.sh  → Docker, deploy user, dirs, ownership, nginx edge, UFW
 #   2) sync-host-secrets (CI) → copies scripts + writes env/<service>.env as deploy
-#   3) app deploy (CI) → compose pull/up
+#   3) app deploy (CI) → compose pull/up + health (+ /mail/ edge check)
 #
-# This script does NOT require sibling .sh files next to it. Sync/deploy upload those.
+# Prefer copying the full deploy/droplet/ directory so nginx/ + ensure-edge.sh are present.
 
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 DEPLOY_HOME="/home/${DEPLOY_USER}"
 ROOT="${DEPLOY_PATH:-/opt/splitsmarter}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARDEN_SSH="${HARDEN_SSH:-1}"
+# Optional: UFW_HTTP_ALLOW_FROM="10.0.0.5 10.116.0.8" for internal-only :80
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -52,17 +53,14 @@ if [[ -n "${DEPLOY_SSH_PUBLIC_KEY:-}" ]]; then
 fi
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${DEPLOY_HOME}/.ssh"
 
-# App root owned by deploy from the start (before any optional copies)
 echo "==> creating ${ROOT}/scripts and ${ROOT}/env (owned by ${DEPLOY_USER})"
 mkdir -p "${ROOT}/scripts" "${ROOT}/env"
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "$ROOT"
 chmod 755 "$ROOT" "${ROOT}/scripts"
 chmod 750 "${ROOT}/env"
 
-# Optional: seed scripts/compose if this bootstrap lives beside them (e.g. full droplet/ folder).
-# Missing files are OK — sync-host-secrets and deploy upload them over SSH as deploy.
 if [[ -f "${SCRIPT_DIR}/sync-env.sh" ]]; then
-  echo "==> seeding host scripts from ${SCRIPT_DIR} (optional)"
+  echo "==> seeding host scripts from ${SCRIPT_DIR}"
   cp -f "${SCRIPT_DIR}/deploy-service.sh" "${ROOT}/scripts/" 2>/dev/null || true
   cp -f "${SCRIPT_DIR}/sync-env.sh" "${ROOT}/scripts/" 2>/dev/null || true
   cp -f "${SCRIPT_DIR}/validate-env.sh" "${ROOT}/scripts/" 2>/dev/null || true
@@ -70,10 +68,9 @@ if [[ -f "${SCRIPT_DIR}/sync-env.sh" ]]; then
   cp -f "${SCRIPT_DIR}/docker-compose.yml" "${ROOT}/docker-compose.yml" 2>/dev/null || true
   chmod 755 "${ROOT}/scripts/"*.sh 2>/dev/null || true
 else
-  echo "==> no sibling scripts next to bootstrap.sh; CI sync/deploy will upload them"
+  echo "==> no sibling app scripts next to bootstrap.sh; CI sync/deploy will upload them"
 fi
 
-# Always re-apply ownership after any root copies
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "$ROOT"
 chmod 750 "${ROOT}/env"
 
@@ -88,18 +85,25 @@ EOF
   systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 fi
 
-ufw allow OpenSSH
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw --force enable || true
+# Nginx path edge + UFW (no Caddy). Prefer full droplet/ tree so nginx/ exists.
+if [[ -f "${SCRIPT_DIR}/ensure-edge.sh" && -d "${SCRIPT_DIR}/nginx" ]]; then
+  echo "==> installing nginx edge (path routes, UFW 80)"
+  chmod +x "${SCRIPT_DIR}/ensure-edge.sh" || true
+  bash "${SCRIPT_DIR}/ensure-edge.sh"
+else
+  echo "==> WARN: ensure-edge.sh / nginx/ missing — install edge later:"
+  echo "    copy full deploy/droplet/ then: sudo bash ensure-edge.sh"
+  ufw allow OpenSSH
+  ufw allow 80/tcp
+  ufw allow 443/tcp
+  ufw --force enable || true
+fi
 
 echo ""
 echo "Bootstrap complete (startup step 1/2)."
 echo "  DEPLOY_PATH=${ROOT}  owner=${DEPLOY_USER}:${DEPLOY_USER}"
-echo "  dirs: ${ROOT}/scripts  ${ROOT}/env"
+echo "  edge: nginx /mail/ → 127.0.0.1:8083 (containers stay localhost-only)"
 echo ""
 echo "Next (startup step 2/2): run GitHub Action sync-host-secrets"
-echo "  → uploads scripts as ${DEPLOY_USER}"
-echo "  → writes ${ROOT}/env/<service>.env"
-echo "Then: deploy mail-service (compose pull/up)."
-echo "Prefer Managed Postgres in the same VPC; never expose 5432 publicly."
+echo "Then: deploy mail-service. Health: http://127.0.0.1:8083/health and http://127.0.0.1/mail/health"
+echo "Prefer Managed Postgres in the same VPC; never expose 5432 or 8083 publicly."
