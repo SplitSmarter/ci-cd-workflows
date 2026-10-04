@@ -79,6 +79,19 @@ def main() -> int:
             )
             return 1
 
+    # Optional per-service placement: services.<name>.target_ids
+    service_target_ids = service.get("target_ids")
+    if service_target_ids is not None:
+        wanted = {str(x) for x in service_target_ids}
+        targets = [t for t in targets if str(t.get("id")) in wanted]
+        if not targets:
+            print(
+                f"Service '{args.service_name}' target_ids {sorted(wanted)} "
+                f"do not match any targets for environment '{env}'",
+                file=sys.stderr,
+            )
+            return 1
+
     target_ids = [str(t["id"]) for t in targets]
     instance_names = [instance_name(env, tid) for tid in target_ids]
     appsec = appsecret_name(env, args.service_name)

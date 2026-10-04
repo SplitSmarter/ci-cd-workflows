@@ -1,7 +1,7 @@
 services:
   mail-service:
     image: ${MAIL_IMAGE:-ghcr.io/splitsmarter/mail-service:production}
-    env_file: .env
+    env_file: env/mail-service.env
     ports:
       - "127.0.0.1:8083:8083"
     restart: unless-stopped

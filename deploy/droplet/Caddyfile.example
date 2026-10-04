@@ -1,0 +1,11 @@
+# Example edge proxy on the apps Droplet (install Caddy separately).
+# Routes public HTTPS to mail-service bound on 127.0.0.1:8083.
+#
+# Replace mail.example.com with your hostname.
+# After first green deploy:
+#   sudo cp Caddyfile.example /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+mail.example.com {
+	reverse_proxy 127.0.0.1:8083
+}

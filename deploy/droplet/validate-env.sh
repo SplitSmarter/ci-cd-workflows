@@ -1,38 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Usage: validate-env.sh KEY [KEY ...]
-# Checks KEY= is present and non-empty in $DEPLOY_PATH/.env
-# Prints only failing key names (never values).
+# Presence-only check for a service env file (no per-key enumeration).
+# Usage: validate-env.sh <service_name>
+# Checks that $DEPLOY_PATH/env/<service_name>.env exists and is non-empty.
 
 ROOT="${DEPLOY_PATH:-/opt/splitsmarter}"
-ENV_FILE="${ROOT}/.env"
-failed=0
+SERVICE_NAME="${1:-${SERVICE_NAME:-}}"
 
-if [[ "$#" -eq 0 ]]; then
-  echo "ERROR: validate-env.sh requires at least one KEY" >&2
-  exit 2
-fi
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
 
-echo "==> validating ${#} required keys in ${ENV_FILE}"
+[[ -n "$SERVICE_NAME" ]] || fail "service_name required (arg1 or SERVICE_NAME=)"
+[[ "$SERVICE_NAME" =~ ^[A-Za-z0-9_-]+$ ]] || fail "invalid service_name: ${SERVICE_NAME}"
+
+ENV_FILE="${ROOT}/env/${SERVICE_NAME}.env"
+
+echo "==> checking secrets file present: ${ENV_FILE}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "missing_env_file"
-  echo "ERROR: $ENV_FILE does not exist. Run sync-host-secrets first." >&2
+  echo "ERROR: ${ENV_FILE} does not exist. Run sync-host-secrets for service=${SERVICE_NAME} first." >&2
   exit 1
 fi
 
-for key in "$@"; do
-  # Match KEY=... on its own line; value must be non-empty (allows multiline continuation)
-  if ! grep -qE "^${key}=." "$ENV_FILE"; then
-    echo "$key"
-    failed=1
-  fi
-done
-
-if [[ "$failed" -ne 0 ]]; then
-  echo "ERROR: one or more required keys missing or empty in $ENV_FILE" >&2
-  echo "Run sync-host-secrets for this environment/service." >&2
+if [[ ! -s "$ENV_FILE" ]]; then
+  echo "empty_env_file"
+  echo "ERROR: ${ENV_FILE} is empty. Re-run sync-host-secrets with a non-empty APPSECRET Variable." >&2
   exit 1
 fi
 
-echo "ok env keys present"
+if [[ ! -r "$ENV_FILE" ]]; then
+  echo "ERROR: ${ENV_FILE} is not readable by $(id -un)." >&2
+  exit 1
+fi
+
+echo "ok secrets file present ${ENV_FILE} ($(wc -l < "${ENV_FILE}") lines)"

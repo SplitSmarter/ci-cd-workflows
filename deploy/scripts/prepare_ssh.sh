@@ -58,10 +58,10 @@ prepare_ssh_verify_connectivity() {
 
 remote_mkdir_deploy() {
   local path="${1:-${DEPLOY_PATH}}"
-  echo "==> ensuring remote directory ${path}/scripts"
-  if ! ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${path}/scripts'"; then
-    echo "ERROR: cannot create ${path}/scripts as ${SSH_USER}." >&2
-    echo "On the host as root: mkdir -p ${path} && chown -R ${SSH_USER}:${SSH_USER} ${path}" >&2
+  echo "==> ensuring remote directories ${path}/scripts and ${path}/env"
+  if ! ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${path}/scripts' '${path}/env'"; then
+    echo "ERROR: cannot create ${path}/scripts or ${path}/env as ${SSH_USER}." >&2
+    echo "On the host as root: mkdir -p ${path}/scripts ${path}/env && chown -R ${SSH_USER}:${SSH_USER} ${path}" >&2
     echo "Or run deploy/droplet/bootstrap.sh as root." >&2
     exit 1
   fi

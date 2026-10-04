@@ -9,6 +9,7 @@ PORT="${3:-8083}"
 HEALTH_PATH="${4:-/health}"
 ROOT="${DEPLOY_PATH:-/opt/splitsmarter}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${ROOT}/env/${SERVICE}.env"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -19,24 +20,25 @@ step() {
   echo "==> $*"
 }
 
-step "preflight host"
+step "preflight host + secrets file for ${SERVICE}"
 if [[ -x "${SCRIPT_DIR}/check-host.sh" ]]; then
-  # shellcheck disable=SC1091
-  DEPLOY_PATH="$ROOT" "${SCRIPT_DIR}/check-host.sh" --require-env
+  DEPLOY_PATH="$ROOT" "${SCRIPT_DIR}/check-host.sh" --require-env "$SERVICE"
 elif [[ -x "${ROOT}/scripts/check-host.sh" ]]; then
-  DEPLOY_PATH="$ROOT" "${ROOT}/scripts/check-host.sh" --require-env
+  DEPLOY_PATH="$ROOT" "${ROOT}/scripts/check-host.sh" --require-env "$SERVICE"
 else
   command -v docker >/dev/null 2>&1 || fail "docker not found. Run bootstrap.sh as root."
   docker info >/dev/null 2>&1 || fail "cannot access Docker daemon as $(id -un)."
-  [[ -f "${ROOT}/.env" ]] || fail "${ROOT}/.env missing. Run sync-host-secrets first."
+  [[ -s "$ENV_FILE" ]] || fail "${ENV_FILE} missing or empty. Run sync-host-secrets first."
 fi
 
 step "cwd ${ROOT}"
 cd "$ROOT" || fail "cannot cd to ${ROOT}"
 [[ -f "${ROOT}/docker-compose.yml" ]] || fail "missing ${ROOT}/docker-compose.yml"
+[[ -s "$ENV_FILE" ]] || fail "${ENV_FILE} missing or empty"
 
+# Compose template for mail-service uses MAIL_IMAGE; keep plain name for debugging.
 export MAIL_IMAGE="$IMAGE"
-step "image ${IMAGE} service ${SERVICE} port ${PORT} health ${HEALTH_PATH}"
+step "image ${IMAGE} service ${SERVICE} port ${PORT} health ${HEALTH_PATH} env_file ${ENV_FILE}"
 
 if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then
   step "docker login ghcr.io"
@@ -53,7 +55,6 @@ step "docker compose up ${SERVICE}"
 docker compose up -d --no-deps --force-recreate "$SERVICE" \
   || fail "compose up failed for ${SERVICE}."
 
-# Normalize health path
 if [[ "$HEALTH_PATH" != /* ]]; then
   HEALTH_PATH="/$HEALTH_PATH"
 fi

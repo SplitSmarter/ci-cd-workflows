@@ -178,15 +178,15 @@ jobs:
       - name: Install PyYAML
         run: pip install pyyaml
 
-      - name: Validate host env keys + docker
+      - name: Preflight secrets file present + docker
         working-directory: ci-cd-workflows
         run: |
           set -euo pipefail
           chmod +x deploy/scripts/*.sh deploy/droplet/*.sh
           INSTANCE_NAME="${{ matrix.instance_name }}"
           DEPLOY_PATH="${{ needs.resolve-target.outputs.deploy_path }}"
-          SERVICE="${{ needs.resolve-target.outputs.service_name }}"
           SERVICE_NAME="${{ needs.resolve-target.outputs.service_name }}"
+          echo "==> preflight INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME} DEPLOY_PATH=${DEPLOY_PATH}"
 
           ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
           # shellcheck source=deploy/scripts/prepare_ssh.sh
@@ -204,24 +204,21 @@ jobs:
           ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
             "chmod +x '${DEPLOY_PATH}/scripts/check-host.sh' '${DEPLOY_PATH}/scripts/validate-env.sh'"
 
-          KEYS=$(python -c "import yaml; from pathlib import Path; data=yaml.safe_load(Path('deploy/required-secrets.yml').read_text()); print(' '.join(data.get('${SERVICE_NAME}', [])))")
-          [[ -n "${KEYS// }" ]] || { echo "ERROR: no required keys for ${SERVICE_NAME}" >&2; exit 1; }
-
-          echo "==> validate required env keys"
+          echo "==> checking secrets file present env/${SERVICE_NAME}.env"
           if ! ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
-            "export DEPLOY_PATH='${DEPLOY_PATH}'; '${DEPLOY_PATH}/scripts/validate-env.sh' ${KEYS}"; then
-            echo "ERROR: Preflight secrets failed for ${INSTANCE_NAME}." >&2
-            echo "Run sync-host-secrets for env=${{ needs.resolve-target.outputs.env }} service=${SERVICE}." >&2
+            "export DEPLOY_PATH='${DEPLOY_PATH}'; '${DEPLOY_PATH}/scripts/validate-env.sh' '${SERVICE_NAME}'"; then
+            echo "ERROR: Preflight secrets file missing for INSTANCE_NAME=${INSTANCE_NAME}." >&2
+            echo "Run sync-host-secrets for env=${{ needs.resolve-target.outputs.env }} service_name=${SERVICE_NAME}." >&2
             exit 1
           fi
 
-          echo "==> host readiness (docker)"
-          if ! remote_check_host "$DEPLOY_PATH" --require-env; then
-            echo "ERROR: Preflight host checks failed for ${INSTANCE_NAME}." >&2
+          echo "==> host readiness (docker) + secrets file"
+          if ! remote_check_host "$DEPLOY_PATH" --require-env "$SERVICE_NAME"; then
+            echo "ERROR: Preflight host checks failed for INSTANCE_NAME=${INSTANCE_NAME}." >&2
             echo "On the droplet as root, run deploy/droplet/bootstrap.sh (installs Docker, docker group, /opt/splitsmarter)." >&2
             exit 1
           fi
-          echo "ok preflight ${INSTANCE_NAME}"
+          echo "ok preflight INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME}"
 
   deploy:
     needs: [resolve-target, build-and-push, preflight-secrets]
@@ -254,23 +251,26 @@ jobs:
           chmod +x deploy/scripts/*.sh deploy/droplet/*.sh
           INSTANCE_NAME="${{ matrix.instance_name }}"
           DEPLOY_PATH="${{ needs.resolve-target.outputs.deploy_path }}"
+          SERVICE_NAME="${{ needs.resolve-target.outputs.service_name }}"
           SERVICE="${{ needs.resolve-target.outputs.compose_service }}"
           IMAGE="${{ needs.build-and-push.outputs.image_ref }}"
           PORT="${{ needs.resolve-target.outputs.container_port }}"
           HEALTH="${{ needs.resolve-target.outputs.health_path }}"
+          echo "==> deploy INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME} IMAGE=${IMAGE}"
 
           ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
           # shellcheck source=deploy/scripts/prepare_ssh.sh
           source deploy/scripts/prepare_ssh.sh
           prepare_ssh /tmp/instance.env
           prepare_ssh_verify_connectivity
-          remote_check_host "$DEPLOY_PATH" --require-env
+          remote_check_host "$DEPLOY_PATH" --require-env "$SERVICE_NAME"
 
           echo "==> copy deploy artifacts"
           remote_mkdir_deploy "$DEPLOY_PATH"
           scp "${SSH_OPTS[@]}" \
             deploy/droplet/deploy-service.sh \
             deploy/droplet/check-host.sh \
+            deploy/droplet/validate-env.sh \
             "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/" \
             || { echo "ERROR: scp scripts failed" >&2; exit 1; }
           scp "${SSH_OPTS[@]}" \
@@ -278,11 +278,11 @@ jobs:
             "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/docker-compose.yml" \
             || { echo "ERROR: scp docker-compose.yml failed" >&2; exit 1; }
 
-          echo "==> remote deploy ${SERVICE} ${IMAGE}"
+          echo "==> remote deploy compose_service=${SERVICE} image=${IMAGE}"
           ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
             "export DEPLOY_PATH='${DEPLOY_PATH}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN='${GHCR_TOKEN}'; \
-             chmod +x '${DEPLOY_PATH}/scripts/deploy-service.sh' '${DEPLOY_PATH}/scripts/check-host.sh'; \
+             chmod +x '${DEPLOY_PATH}/scripts/deploy-service.sh' '${DEPLOY_PATH}/scripts/check-host.sh' '${DEPLOY_PATH}/scripts/validate-env.sh'; \
              '${DEPLOY_PATH}/scripts/deploy-service.sh' '${SERVICE}' '${IMAGE}' '${PORT}' '${HEALTH}'" \
-            || { echo "ERROR: deploy-service.sh failed for ${INSTANCE_NAME}" >&2; exit 1; }
+            || { echo "ERROR: deploy-service.sh failed for INSTANCE_NAME=${INSTANCE_NAME}" >&2; exit 1; }
 
-          echo "ok deployed ${SERVICE} to ${INSTANCE_NAME}"
+          echo "ok deployed SERVICE_NAME=${SERVICE_NAME} to INSTANCE_NAME=${INSTANCE_NAME}"
