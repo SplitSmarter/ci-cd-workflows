@@ -64,30 +64,105 @@ jobs:
 
 ## Startup order (new droplet)
 
+Prerequisite: Droplet already has the **`deploy` user** and your SSH public key in `/home/deploy/.ssh/authorized_keys`.
+
 ```text
-1) bootstrap.sh (as root)     → Docker, deploy user, dirs, nginx edge, UFW
-2) sync-host-secrets (CI)     → uploads scripts + writes env/<service>.env as deploy
-3) app deploy (CI)            → compose pull/up + localhost health + /mail/ edge check
+1) prepare-staging.sh (root, manual)  → creates /tmp/deploy owned by deploy
+2) scp edge kit (Windows → deploy)    → bootstrap.sh + ensure-edge.sh + nginx/
+3) bootstrap.sh (root)                → Docker, /opt/splitsmarter, nginx edge, UFW
+4) sync-host-secrets (CI)             → scripts + env/<service>.env
+5) app deploy (CI)                    → compose up + localhost + /mail/ health
 ```
 
-`/opt/splitsmarter` is a conventional app root (not mandatory). Override with `DEPLOY_PATH` in the INSTANCE Variable / inventory. Bootstrap always `chown -R deploy:deploy` on that path so sync can write `env/`.
+`/opt/splitsmarter` is the default app root. Override with `DEPLOY_PATH` in the INSTANCE Variable / inventory.
 
-## First-time droplet setup (bootstrap)
+## First-time droplet setup (Windows)
 
-1. Create Droplet (Ubuntu LTS) + **VPC** + Cloud Firewall (**22 / 80 / 443** public). Prefer **Managed Postgres** in the same VPC; **never expose 5432** publicly (trusted source = apps Droplet only).
-2. Create DB `mail_forex_geo` and schema `mail` on Managed Postgres when ready.
-3. Copy the **full** `deploy/droplet/` folder (so `nginx/` + `ensure-edge.sh` are present) and run as **root**:
+Replace `YOUR.DROPLET.IP` and the key path if needed. Local kit path assumes this repo checkout.
+
+### 0) Server already has deploy SSH
+
+You can already:
+
+```powershell
+ssh -i $env:USERPROFILE\.ssh\dev_instance_1 deploy@YOUR.DROPLET.IP
+```
+
+Also ensure Org Variables / Secrets exist before CI steps (`DEVELOPMENT_INSTANCE_1`, `DEVELOPMENT_APPSECRET_MAILSERVICE`, `GHCR_USERNAME`, `GHCR_TOKEN`). Prefer Managed Postgres in the same VPC; never expose 5432 or 8083 publicly. Cloud Firewall: **22 / 80 / 443**.
+
+### 1) prepare-staging (manual, as root)
+
+`deploy` cannot create a world-writable staging dir reliably; run this once as **root** on the droplet.
+
+Option A — from Windows, if you have root SSH:
+
+```powershell
+$key = "$env:USERPROFILE\.ssh\dev_instance_1"
+# copy prepare-staging only, then run as root
+scp -i $key "D:\Projects\split smarter\ci-cd-workflows\deploy\droplet\prepare-staging.sh" root@YOUR.DROPLET.IP:/tmp/prepare-staging.sh
+ssh -i $key root@YOUR.DROPLET.IP "bash /tmp/prepare-staging.sh"
+```
+
+Option B — already on the droplet as root:
 
 ```bash
-export DEPLOY_SSH_PUBLIC_KEY='ssh-ed25519 AAAA... gha-deploy'
-# optional: export DEPLOY_PATH=/opt/splitsmarter
-# optional internal-only :80: export UFW_HTTP_ALLOW_FROM='10.116.0.8'
-sudo -E bash bootstrap.sh
+# paste or upload prepare-staging.sh, then:
+bash prepare-staging.sh
+# equivalent: mkdir -p /tmp/deploy && chown deploy:deploy /tmp/deploy && chmod 755 /tmp/deploy
 ```
 
-Bootstrap installs Docker + Compose, creates `deploy` (docker group), creates `${DEPLOY_PATH}/{scripts,env}` **owned by deploy**, optional SSH password-login disable (`HARDEN_SSH=1`), **Nginx path edge**, and **UFW** (OpenSSH + 80/443; never opens container ports like 8083).
+### 2) scp bootstrap + edge kit (as deploy, from Windows)
 
-4. Org Variables:
+```powershell
+$key = "$env:USERPROFILE\.ssh\dev_instance_1"
+$droplet = "deploy@YOUR.DROPLET.IP"
+$src = "D:\Projects\split smarter\ci-cd-workflows\deploy\droplet"
+
+scp -i $key "$src\bootstrap.sh" "${droplet}:/tmp/deploy/bootstrap.sh"
+scp -i $key "$src\ensure-edge.sh" "${droplet}:/tmp/deploy/ensure-edge.sh"
+scp -i $key -r "$src\nginx" "${droplet}:/tmp/deploy/nginx"
+```
+
+On the host you should have:
+
+```text
+/tmp/deploy/bootstrap.sh
+/tmp/deploy/ensure-edge.sh
+/tmp/deploy/nginx/splitsmarter.conf
+/tmp/deploy/nginx/locations/mail-service.conf
+```
+
+### 3) bootstrap (as root on the droplet)
+
+```bash
+cd /tmp/deploy
+# optional: export DEPLOY_PATH=/opt/splitsmarter
+# optional: export UFW_HTTP_ALLOW_FROM='10.116.0.8'
+bash bootstrap.sh
+```
+
+From Windows with root SSH:
+
+```powershell
+ssh -i $env:USERPROFILE\.ssh\dev_instance_1 root@YOUR.DROPLET.IP "cd /tmp/deploy && bash bootstrap.sh"
+```
+
+Bootstrap **requires** `ensure-edge.sh` + `nginx/` next to `bootstrap.sh` (fails if missing). Installs Docker + Compose, `/opt/splitsmarter/{scripts,env}` owned by `deploy`, nginx `/mail/` → `127.0.0.1:8083`, UFW 22/80/443 (not 8083). Keeps `/tmp/deploy` owned by `deploy` for later uploads.
+
+### 4) sync-host-secrets (CI)
+
+In **ci-cd-workflows**, run workflow **Sync Host Secrets**:
+
+- `environment` = `development` (or qa / testing / production)
+- `service_name` = `mail-service`
+
+This uploads host scripts and writes `/opt/splitsmarter/env/mail-service.env` as `deploy`. Do this before the first app deploy (and again when APPSECRET changes).
+
+### 5) app deployment (CI)
+
+Push / run the app repo pipeline (e.g. `mail-service` → `python-docker-deploy.yml`). It preflights secrets file + Docker + nginx, then compose up. Health: `http://127.0.0.1:8083/health` and `http://127.0.0.1/mail/health`.
+
+### Org Variable examples
 
 **`DEVELOPMENT_INSTANCE_1`**
 
@@ -101,7 +176,7 @@ SSH_KEY=-----BEGIN OPENSSH PRIVATE KEY-----
 -----END OPENSSH PRIVATE KEY-----
 ```
 
-**`DEVELOPMENT_APPSECRET_MAILSERVICE`** (example — include what the app needs)
+**`DEVELOPMENT_APPSECRET_MAILSERVICE`** (example)
 
 ```text
 APP_NAME=mail-service
@@ -113,10 +188,6 @@ ELASTIC_EMAIL_API_KEY=...
 MAILERSEND_API_KEY=...
 MAIL_DATABASE_URL=postgresql+asyncpg://user:pass@PRIVATE_HOST:25060/mail_forex_geo
 ```
-
-5. Org Secrets `GHCR_USERNAME` + `GHCR_TOKEN`.
-6. Run **Sync Host Secrets** (`environment=development`, `service_name=mail-service`) → uploads scripts + writes `env/mail-service.env` as `deploy`.
-7. Push `mail-service` → preflight (file present + Docker + nginx) → compose up → health on `127.0.0.1:8083` **and** `http://127.0.0.1/mail/health`.
 
 ## SSH hardening
 
