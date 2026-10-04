@@ -55,26 +55,31 @@ jobs:
       GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
 ```
 
+## Startup order (new droplet)
+
+```text
+1) bootstrap.sh (as root)     → Docker, deploy user, dirs, ownership, firewall
+2) sync-host-secrets (CI)     → uploads scripts + writes env/<service>.env as deploy
+3) app deploy (CI)            → compose pull/up + health
+```
+
+`/opt/splitsmarter` is a conventional app root (not mandatory). Override with `DEPLOY_PATH` in the INSTANCE Variable / inventory. Bootstrap always `chown -R deploy:deploy` on that path so sync can write `env/`.
+
 ## First-time droplet setup (bootstrap)
 
 1. Create Droplet (Ubuntu LTS) + **VPC** + Cloud Firewall (**22 / 80 / 443** public). Prefer **Managed Postgres** in the same VPC; **never expose 5432** publicly (trusted source = apps Droplet only).
 2. Create DB `mail_forex_geo` and schema `mail` on Managed Postgres when ready.
-3. Copy `deploy/droplet/` to the host (or clone this repo) and run as **root**:
+3. Copy **only** `bootstrap.sh` to the host (or the full `deploy/droplet/` folder) and run as **root**:
 
 ```bash
 export DEPLOY_SSH_PUBLIC_KEY='ssh-ed25519 AAAA... gha-deploy'
+# optional: export DEPLOY_PATH=/opt/splitsmarter
 sudo -E bash bootstrap.sh
 ```
 
-Bootstrap installs Docker + Compose, creates `deploy` user (docker group), `/opt/splitsmarter/{scripts,env}`, optional SSH password-login disable (`HARDEN_SSH=1`), UFW 22/80/443, and verifies `deploy` can run `docker info`.
+Bootstrap installs Docker + Compose, creates `deploy` (docker group), creates `${DEPLOY_PATH}/{scripts,env}` **owned by deploy**, optional SSH password-login disable (`HARDEN_SSH=1`), UFW 22/80/443. It does **not** require sibling scripts next to it — **sync-host-secrets** uploads those.
 
-4. Confirm as `deploy` (new SSH session so group applies):
-
-```bash
-ssh deploy@YOUR.DROPLET.IP 'docker info && docker compose version && ls -la /opt/splitsmarter/env'
-```
-
-5. Org Variables:
+4. Org Variables:
 
 **`DEVELOPMENT_INSTANCE_1`**
 
@@ -101,9 +106,9 @@ MAILERSEND_API_KEY=...
 MAIL_DATABASE_URL=postgresql+asyncpg://user:pass@PRIVATE_HOST:25060/mail_forex_geo
 ```
 
-6. Org Secrets `GHCR_USERNAME` + `GHCR_TOKEN`.
-7. Run **Sync Host Secrets** (`environment=development`, `service_name=mail-service`) → writes `env/mail-service.env`.
-8. Push `mail-service` → preflight (file present + Docker) → compose up → health on `127.0.0.1:8083`.
+5. Org Secrets `GHCR_USERNAME` + `GHCR_TOKEN`.
+6. Run **Sync Host Secrets** (`environment=development`, `service_name=mail-service`) → uploads scripts + writes `env/mail-service.env` as `deploy`.
+7. Push `mail-service` → preflight (file present + Docker) → compose up → health on `127.0.0.1:8083`.
 
 ## SSH hardening
 
