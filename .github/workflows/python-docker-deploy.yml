@@ -96,10 +96,16 @@ jobs:
 
       - name: Test
         run: |
-          if [[ -d tests ]] && pip show pytest >/dev/null 2>&1; then
-            pytest -q
+          if [[ -d tests ]]; then
+            if ! pip show pytest >/dev/null 2>&1; then
+              echo "tests/ is present but pytest is not installed."
+              echo "Add pytest (and pytest-asyncio if needed) to requirements.txt."
+              exit 1
+            fi
+            # Skip integration tests in deploy CI (they need external services).
+            pytest -q -m "not integration"
           else
-            echo "No pytest suite detected; skipping tests"
+            echo "No tests/ directory; skipping tests"
           fi
 
   build-and-push:

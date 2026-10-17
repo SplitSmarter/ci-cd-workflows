@@ -102,10 +102,11 @@ else
 fi
 
 if [[ "$REQUIRE_EDGE" -eq 1 ]]; then
-  [[ -n "$EDGE_PATH" ]] || fail "--require-edge needs a path (e.g. --require-edge /mail)"
+  [[ -n "$EDGE_PATH" ]] || fail "--require-edge needs a path (e.g. --require-edge /mail or /)"
   [[ "$EDGE_PATH" == /* ]] || EDGE_PATH="/${EDGE_PATH}"
-  EDGE_PATH="${EDGE_PATH%/}"
-  step "nginx edge path ${EDGE_PATH}"
+  EDGE_DISPLAY="$EDGE_PATH"
+  EDGE_PATH="${EDGE_PATH%/}"   # "/" → "" (root catch-all); "/mail" stays "/mail"
+  step "nginx edge path ${EDGE_DISPLAY}"
   if systemctl is-active --quiet nginx 2>/dev/null; then
     echo "nginx is active"
   else

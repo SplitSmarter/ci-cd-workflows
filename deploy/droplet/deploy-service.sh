@@ -42,8 +42,12 @@ cd "$ROOT" || fail "cannot cd to ${ROOT}"
 [[ -f "${ROOT}/docker-compose.yml" ]] || fail "missing ${ROOT}/docker-compose.yml"
 [[ -s "$ENV_FILE" ]] || fail "${ENV_FILE} missing or empty"
 
-# Compose template for mail-service uses MAIL_IMAGE; keep plain name for debugging.
-export MAIL_IMAGE="$IMAGE"
+# Map compose service → image env var used in docker-compose.yml
+case "$SERVICE" in
+  mail-service) export MAIL_IMAGE="$IMAGE" ;;
+  gateway) export GATEWAY_IMAGE="$IMAGE" ;;
+  *) fail "no image env mapping for compose service '${SERVICE}' (add case in deploy-service.sh)" ;;
+esac
 step "image ${IMAGE} service ${SERVICE} port ${PORT} health ${HEALTH_PATH} env_file ${ENV_FILE}"
 
 if [[ -n "${GHCR_USERNAME:-}" && -n "${GHCR_TOKEN:-}" ]]; then

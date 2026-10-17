@@ -36,6 +36,7 @@ Nginx edge (installed by bootstrap / `ensure-edge.sh`, not under `/opt`):
 
 ```text
 /etc/nginx/sites-available/splitsmarter
+/etc/nginx/splitsmarter.d/gateway.conf        # location / → 127.0.0.1:8080
 /etc/nginx/splitsmarter.d/mail-service.conf   # location /mail/ → 127.0.0.1:8083
 ```
 
@@ -46,7 +47,8 @@ Nginx edge (installed by bootstrap / `ensure-edge.sh`, not under `/opt`):
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | [`sync-host-secrets.yml`](../.github/workflows/sync-host-secrets.yml) | `workflow_dispatch` / `workflow_call` | APPSECRET → `env/<service>.env` (no Docker required) |
-| [`python-docker-deploy.yml`](../.github/workflows/python-docker-deploy.yml) | `workflow_call` | CI → GHCR → file present + Docker + nginx preflight → compose recreate + edge health |
+| [`python-docker-deploy.yml`](../.github/workflows/python-docker-deploy.yml) | `workflow_call` | Python → GHCR → compose + edge health |
+| [`java-docker-deploy.yml`](../.github/workflows/java-docker-deploy.yml) | `workflow_call` | Java/Maven → GHCR → compose + edge health |
 
 App repos (e.g. `mail-service`) only need a thin caller:
 
@@ -199,13 +201,14 @@ MAIL_DATABASE_URL=postgresql+asyncpg://user:pass@PRIVATE_HOST:25060/mail_forex_g
 
 ## Edge proxy (Nginx only — no Caddy)
 
-Mail binds to `127.0.0.1:8083` only. **Nginx** on the Droplet terminates public **80** and path-routes:
+Containers bind localhost only. **Nginx** on the Droplet terminates public **80**:
 
 | Path | Upstream |
 |------|----------|
+| `/` | `127.0.0.1:8080` (gateway catch-all) |
 | `/mail/` | `127.0.0.1:8083` (prefix stripped) |
 
-Configs live in [`droplet/nginx/`](droplet/nginx/). Install / refresh as root:
+Configs live in [`droplet/nginx/`](droplet/nginx/). After adding/changing locations, refresh as root:
 
 ```bash
 # from a copy of deploy/droplet/ on the host
@@ -215,13 +218,31 @@ sudo bash ensure-edge.sh
 **What deploy checks (per service with `edge_path` in inventory):**
 
 1. **Preflight / check-host:** nginx is active; soft-warn if UFW has no `80/tcp` rule visible.
-2. **After compose up:** `curl` direct `127.0.0.1:8083/health`, then `curl` via edge `127.0.0.1/mail/health`.
+2. **After compose up:** direct localhost health, then edge (`http://127.0.0.1/health` for gateway, `http://127.0.0.1/mail/health` for mail).
 
-CI cannot reconfigure UFW (needs root). If edge checks fail, re-run `ensure-edge.sh` as root on that host. Prefer also keeping DO Cloud Firewall aligned (22/80/443; **not** 8083).
+CI cannot reconfigure UFW (needs root). If edge checks fail, re-run `ensure-edge.sh` as root. Keep DO Cloud Firewall on 22/80/443 (**not** 8080/8083).
 
-Add another service later: drop `droplet/nginx/locations/<service>.conf`, set `edge_path` in `instances.yml`, re-run `ensure-edge.sh` as root, redeploy.
+### Gateway APPSECRET (`{ENV}_APPSECRET_GATEWAY`)
 
-Point the gateway `MAIL_SERVICE_HOSTNAME` at `http://<host>/mail` (or your public URL) when ready.
+Sync with `service_name=gateway` before first deploy. Example keys (PEM as quoted one-liners with `\n`, same as local `.env`):
+
+```text
+DB_USER=...
+DB_PASSWORD=...
+SPRING_R2DBC_URL=r2dbc:postgresql://PRIVATE_HOST:25060/gateway
+USER_BACKEND_URL=http://...
+MAIL_BACKEND_URL=http://127.0.0.1/mail
+SHARED_SECRET=...
+MICROSERVICES_SECRET=...
+INTERNAL_SECRET=...
+PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
+GOOGLE_WEB_CLIENT_ID=...
+REFRESH_TOKEN_VALIDITY_SECONDS=108000
+ACCESS_TOKEN_VALIDITY_SECONDS=300
+```
+
+Same-host mail via nginx: set `MAIL_BACKEND_URL=http://127.0.0.1/mail` (not `:8083`).
 
 ## SSH key bootstrap
 

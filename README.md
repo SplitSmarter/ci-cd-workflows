@@ -8,6 +8,7 @@ Central reusable GitHub Actions for SplitSmarter.
 |----------|---------|
 | [`.github/workflows/expo-deploy.yml`](.github/workflows/expo-deploy.yml) | Expo / EAS mobile builds |
 | [`.github/workflows/python-docker-deploy.yml`](.github/workflows/python-docker-deploy.yml) | Python service → GHCR → Droplet Compose deploy |
+| [`.github/workflows/java-docker-deploy.yml`](.github/workflows/java-docker-deploy.yml) | Java/Maven service → GHCR → Droplet Compose deploy |
 | [`.github/workflows/sync-host-secrets.yml`](.github/workflows/sync-host-secrets.yml) | Sync `{ENV}_APPSECRET_*` Variables to Droplet `.env` |
 
 ## Backend deploy docs

@@ -13,7 +13,7 @@ branch_map:
 
 # GitHub Variable naming: {ENV}_{TYPE}_{REST}
 #   INSTANCE → DEVELOPMENT_INSTANCE_1
-#   APPSECRET → DEVELOPMENT_APPSECRET_MAILSERVICE (hyphens stripped from service name)
+#   APPSECRET → DEVELOPMENT_APPSECRET_MAILSERVICE / DEVELOPMENT_APPSECRET_GATEWAY
 instances:
   development:
     targets:
@@ -26,6 +26,13 @@ instances:
         container_port: 8083
         health_path: /health
         edge_path: /mail
+      gateway:
+        target_ids: [1]
+        compose_service: gateway
+        image_name: gateway
+        container_port: 8080
+        health_path: /health
+        edge_path: /
   qa:
     targets:
       - id: 1
@@ -37,6 +44,13 @@ instances:
         container_port: 8083
         health_path: /health
         edge_path: /mail
+      gateway:
+        target_ids: [1]
+        compose_service: gateway
+        image_name: gateway
+        container_port: 8080
+        health_path: /health
+        edge_path: /
   testing:
     targets:
       - id: 1
@@ -48,6 +62,13 @@ instances:
         container_port: 8083
         health_path: /health
         edge_path: /mail
+      gateway:
+        target_ids: [1]
+        compose_service: gateway
+        image_name: gateway
+        container_port: 8080
+        health_path: /health
+        edge_path: /
   production:
     targets:
       - id: 1
@@ -59,4 +80,10 @@ instances:
         container_port: 8083
         health_path: /health
         edge_path: /mail
-
+      gateway:
+        target_ids: [1]
+        compose_service: gateway
+        image_name: gateway
+        container_port: 8080
+        health_path: /health
+        edge_path: /
