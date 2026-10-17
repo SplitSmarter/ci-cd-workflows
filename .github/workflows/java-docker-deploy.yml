@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: "."
+      git_ref:
+        description: Optional branch/tag/SHA to checkout in the app repo (empty = caller SHA)
+        required: false
+        type: string
+        default: ""
     secrets:
       GHCR_USERNAME:
         required: true
@@ -70,6 +75,8 @@ jobs:
     steps:
       - name: Checkout application
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -80,10 +87,12 @@ jobs:
 
       - name: Maven package
         run: |
-          if [[ -x ./mvnw ]]; then
-            chmod +x ./mvnw
-            ./mvnw -B -DskipTests package
-          elif [[ -f ./mvnw ]]; then
+          set -euo pipefail
+          if [[ ! -f .mvn/wrapper/maven-wrapper.properties ]]; then
+            echo "ERROR: missing .mvn/wrapper/maven-wrapper.properties (must be committed; check .gitignore)." >&2
+            exit 1
+          fi
+          if [[ -f ./mvnw ]]; then
             chmod +x ./mvnw
             ./mvnw -B -DskipTests package
           else
@@ -102,6 +111,8 @@ jobs:
     steps:
       - name: Checkout application
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}
 
       - name: Set image tags
         id: meta

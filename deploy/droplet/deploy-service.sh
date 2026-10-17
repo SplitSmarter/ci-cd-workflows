@@ -83,11 +83,13 @@ if [[ "$HEALTH_PATH" != /* ]]; then
   HEALTH_PATH="/$HEALTH_PATH"
 fi
 
-step "health check http://127.0.0.1:${PORT}${HEALTH_PATH}"
+# Spring Boot on small droplets can take >60s; allow ~3 minutes
+HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-90}"
+step "health check http://127.0.0.1:${PORT}${HEALTH_PATH} (up to ${HEALTH_ATTEMPTS}x2s)"
 healthy=0
-for i in $(seq 1 30); do
+for i in $(seq 1 "$HEALTH_ATTEMPTS"); do
   if curl -fsS "http://127.0.0.1:${PORT}${HEALTH_PATH}" >/dev/null; then
-    echo "ok healthy direct (${i}/30)"
+    echo "ok healthy direct (${i}/${HEALTH_ATTEMPTS})"
     healthy=1
     break
   fi
@@ -96,7 +98,7 @@ done
 
 if [[ "$healthy" -ne 1 ]]; then
   docker compose logs --no-color --tail=100 "$SERVICE" || true
-  fail "health check failed for ${SERVICE} on :${PORT}${HEALTH_PATH} after ~60s"
+  fail "health check failed for ${SERVICE} on :${PORT}${HEALTH_PATH} after ~$((HEALTH_ATTEMPTS * 2))s"
 fi
 
 # Traffic via nginx path (containers stay on 127.0.0.1; no public 8083)

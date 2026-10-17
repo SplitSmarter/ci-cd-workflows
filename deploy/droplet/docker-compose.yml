@@ -15,12 +15,17 @@ services:
   gateway:
     image: ${GATEWAY_IMAGE:-ghcr.io/splitsmarter/gateway:production}
     env_file: env/gateway.env
+    environment:
+      # 512MB droplets: keep heap small (mail-service may share the host)
+      JAVA_TOOL_OPTIONS: ${GATEWAY_JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=40.0 -Xms64m -Xmx192m}
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
+    mem_limit: 256m
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 15s
       timeout: 5s
-      retries: 5
-      start_period: 40s
+      retries: 8
+      start_period: 120s
+
