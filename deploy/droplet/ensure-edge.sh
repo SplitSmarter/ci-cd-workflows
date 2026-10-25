@@ -7,10 +7,13 @@ set -euo pipefail
 # Optional:
 #   UFW_HTTP_ALLOW_FROM="10.0.0.5 10.116.0.8"  # only these sources to :80
 #   (empty = allow 80/tcp from Anywhere — tighten for internal-only later)
+#   EDGE_PROFILE=site   # website droplet: only location / → 127.0.0.1:8084
+#   EDGE_PROFILE=api    # default: API locations, skip main-website.conf
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NGINX_SRC="${SCRIPT_DIR}/nginx"
 UFW_HTTP_ALLOW_FROM="${UFW_HTTP_ALLOW_FROM:-}"
+EDGE_PROFILE="${EDGE_PROFILE:-api}"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 step() { echo "==> $*"; }
@@ -28,8 +31,23 @@ if [[ -f "${NGINX_SRC}/splitsmarter.conf" ]]; then
 else
   fail "missing ${NGINX_SRC}/splitsmarter.conf (copy full deploy/droplet/ folder when bootstrapping edge)"
 fi
-if [[ -d "${NGINX_SRC}/locations" ]]; then
-  cp -f "${NGINX_SRC}/locations/"*.conf /etc/nginx/splitsmarter.d/ 2>/dev/null || true
+if [[ ! -d "${NGINX_SRC}/locations" ]]; then
+  fail "missing ${NGINX_SRC}/locations"
+fi
+if [[ "$EDGE_PROFILE" == "site" ]]; then
+  [[ -f "${NGINX_SRC}/locations/main-website.conf" ]] || fail "missing ${NGINX_SRC}/locations/main-website.conf"
+  rm -f /etc/nginx/splitsmarter.d/*.conf
+  cp -f "${NGINX_SRC}/locations/main-website.conf" /etc/nginx/splitsmarter.d/main-website.conf
+elif [[ "$EDGE_PROFILE" == "api" ]]; then
+  rm -f /etc/nginx/splitsmarter.d/main-website.conf
+  for conf in "${NGINX_SRC}/locations/"*.conf; do
+    [[ -f "$conf" ]] || continue
+    base="$(basename "$conf")"
+    [[ "$base" == "main-website.conf" ]] && continue
+    cp -f "$conf" "/etc/nginx/splitsmarter.d/${base}"
+  done
+else
+  fail "unknown EDGE_PROFILE '${EDGE_PROFILE}' (use api or site)"
 fi
 
 ln -sf /etc/nginx/sites-available/splitsmarter /etc/nginx/sites-enabled/splitsmarter
@@ -62,5 +80,9 @@ step "edge status"
 systemctl is-active --quiet nginx || fail "nginx is not active"
 ufw status | sed -n '1,40p' || true
 
-echo "ok ensure-edge: nginx path routes ready (e.g. http://<host>/mail/ → 127.0.0.1:8083)"
-echo "   Add more services: drop a file in ${NGINX_SRC}/locations/ and re-run ensure-edge.sh as root."
+echo "ok ensure-edge: profile ${EDGE_PROFILE}"
+if [[ "$EDGE_PROFILE" == "site" ]]; then
+  echo "   http://<host>/ → 127.0.0.1:8084"
+else
+  echo "   http://<host>/mail/ → 127.0.0.1:8083 (API profile skips main-website.conf)"
+fi
