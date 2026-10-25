@@ -46,6 +46,7 @@ cd "$ROOT" || fail "cannot cd to ${ROOT}"
 case "$SERVICE" in
   mail-service) export MAIL_IMAGE="$IMAGE" ;;
   gateway) export GATEWAY_IMAGE="$IMAGE" ;;
+  main-website) export MAIN_WEBSITE_IMAGE="$IMAGE" ;;
   *) fail "no image env mapping for compose service '${SERVICE}' (add case in deploy-service.sh)" ;;
 esac
 step "image ${IMAGE} service ${SERVICE} port ${PORT} health ${HEALTH_PATH} env_file ${ENV_FILE}"

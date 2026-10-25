@@ -66,7 +66,7 @@ jobs:
 
 ## Startup order (new droplet)
 
-Prerequisite: Droplet already has the **`deploy` user** and your SSH public key in `/home/deploy/.ssh/authorized_keys`.
+Prerequisite: Droplet has the **`deploy` user** and your SSH public key in `/home/deploy/.ssh/authorized_keys`. A fresh image only has `root`. Create `deploy` first (below); `prepare-staging.sh` does not create the user and exits with `user deploy does not exist yet` if you skip this.
 
 ```text
 1) prepare-staging.sh (root, manual)  → creates /tmp/deploy owned by deploy
@@ -82,12 +82,31 @@ Prerequisite: Droplet already has the **`deploy` user** and your SSH public key 
 
 Replace `YOUR.DROPLET.IP` and the key path if needed. Local kit path assumes this repo checkout.
 
-### 0) Server already has deploy SSH
+### 0) Ensure the deploy user exists
 
-You can already:
+`prepare-staging.sh` only creates `/tmp/deploy` and `chown`s it to `deploy`. Log in as **root** and create the user if `id deploy` fails.
+
+Use the public half of the same key you will pass to `ssh -i` (for this droplet, `C:\Users\Niles\.ssh\dev_instance_2.pub` — one line, no quotes). Quote the Windows path; an unquoted `$env:USERPROFILE\.ssh\...` is not expanded and OpenSSH reports `Identity file ... not accessible`.
 
 ```powershell
-ssh -i $env:USERPROFILE\.ssh\dev_instance_1 deploy@YOUR.DROPLET.IP
+ssh -i "C:\Users\Niles\.ssh\dev_instance_2" root@YOUR.DROPLET.IP
+```
+
+On the droplet, as root:
+
+```bash
+id deploy >/dev/null 2>&1 || useradd -m -s /bin/bash deploy
+install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
+# paste the single line from the matching .pub file
+echo 'ssh-ed25519 AAAA…comment' > /home/deploy/.ssh/authorized_keys
+chown deploy:deploy /home/deploy/.ssh/authorized_keys
+chmod 600 /home/deploy/.ssh/authorized_keys
+```
+
+Confirm from Windows (this must succeed before `prepare-staging.sh`):
+
+```powershell
+ssh -i "C:\Users\Niles\.ssh\dev_instance_2" deploy@YOUR.DROPLET.IP
 ```
 
 Also ensure Org Variables / Secrets exist before CI steps (`DEVELOPMENT_INSTANCE_1`, `DEVELOPMENT_APPSECRET_MAILSERVICE`, `GHCR_USERNAME`, `GHCR_TOKEN`). Prefer Managed Postgres in the same VPC; never expose 5432 or 8083 publicly. Cloud Firewall: **22 / 80 / 443**.

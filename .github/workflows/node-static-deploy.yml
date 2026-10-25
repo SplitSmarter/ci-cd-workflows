@@ -1,0 +1,314 @@
+name: Node Static Deploy
+
+on:
+  workflow_call:
+    inputs:
+      branch_name:
+        required: true
+        type: string
+      service_name:
+        required: true
+        type: string
+      project_root:
+        required: false
+        type: string
+        default: "."
+    secrets:
+      GHCR_USERNAME:
+        required: true
+      GHCR_TOKEN:
+        required: true
+
+jobs:
+  resolve-target:
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.resolve.outputs.env }}
+      service_name: ${{ steps.resolve.outputs.service_name }}
+      compose_service: ${{ steps.resolve.outputs.compose_service }}
+      image_name: ${{ steps.resolve.outputs.image_name }}
+      container_port: ${{ steps.resolve.outputs.container_port }}
+      health_path: ${{ steps.resolve.outputs.health_path }}
+      edge_path: ${{ steps.resolve.outputs.edge_path }}
+      deploy_path: ${{ steps.resolve.outputs.deploy_path }}
+      registry: ${{ steps.resolve.outputs.registry }}
+      instance_names: ${{ steps.resolve.outputs.instance_names }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: SplitSmarter/ci-cd-workflows
+          ref: main
+          path: ci-cd-workflows
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Resolve targets
+        id: resolve
+        working-directory: ci-cd-workflows
+        run: |
+          python deploy/scripts/resolve_target.py \
+            --inventory deploy/instances.yml \
+            --branch-name "${{ inputs.branch_name }}" \
+            --service-name "${{ inputs.service_name }}" \
+            --github-output
+
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.project_root }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ inputs.project_root }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  build-and-push:
+    needs: [resolve-target, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      image_ref: ${{ steps.meta.outputs.image_ref }}
+    env:
+      DEVELOPMENT_APPSECRET_MAINWEBSITE: ${{ vars.DEVELOPMENT_APPSECRET_MAINWEBSITE }}
+      QA_APPSECRET_MAINWEBSITE: ${{ vars.QA_APPSECRET_MAINWEBSITE }}
+      TESTING_APPSECRET_MAINWEBSITE: ${{ vars.TESTING_APPSECRET_MAINWEBSITE }}
+      PRODUCTION_APPSECRET_MAINWEBSITE: ${{ vars.PRODUCTION_APPSECRET_MAINWEBSITE }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Set image tags
+        id: meta
+        run: |
+          SHA_SHORT="${GITHUB_SHA::12}"
+          REGISTRY="${{ needs.resolve-target.outputs.registry }}"
+          IMAGE_NAME="${{ needs.resolve-target.outputs.image_name }}"
+          ENV_NAME="${{ needs.resolve-target.outputs.env }}"
+          IMAGE_SHA="${REGISTRY}/${IMAGE_NAME}:${SHA_SHORT}"
+          echo "image_sha=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_env=${REGISTRY}/${IMAGE_NAME}:${ENV_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Read Vite build settings
+        run: |
+          set -euo pipefail
+          case "${{ needs.resolve-target.outputs.env }}" in
+            development) PAYLOAD="${DEVELOPMENT_APPSECRET_MAINWEBSITE:-}" ;;
+            qa) PAYLOAD="${QA_APPSECRET_MAINWEBSITE:-}" ;;
+            testing) PAYLOAD="${TESTING_APPSECRET_MAINWEBSITE:-}" ;;
+            production) PAYLOAD="${PRODUCTION_APPSECRET_MAINWEBSITE:-}" ;;
+            *) echo "Unknown environment" >&2; exit 1 ;;
+          esac
+          GUIDE=""
+          API=""
+          if [[ -n "$PAYLOAD" ]]; then
+            while IFS= read -r line || [[ -n "$line" ]]; do
+              case "$line" in
+                ""|\#*) continue ;;
+                VITE_GUIDE_URL=*) GUIDE="${line#VITE_GUIDE_URL=}" ;;
+                VITE_API_URL=*) API="${line#VITE_API_URL=}" ;;
+              esac
+            done <<< "$PAYLOAD"
+          fi
+          GUIDE="${GUIDE%\"}"
+          GUIDE="${GUIDE#\"}"
+          API="${API%\"}"
+          API="${API#\"}"
+          echo "VITE_GUIDE_URL=${GUIDE}" >> "$GITHUB_ENV"
+          echo "VITE_API_URL=${API}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.project_root }}
+          push: true
+          build-args: |
+            VITE_GUIDE_URL=${{ env.VITE_GUIDE_URL }}
+            VITE_API_URL=${{ env.VITE_API_URL }}
+          tags: |
+            ${{ steps.meta.outputs.image_sha }}
+            ${{ steps.meta.outputs.image_env }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  preflight-secrets:
+    needs: [resolve-target, build-and-push]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        instance_name: ${{ fromJson(needs.resolve-target.outputs.instance_names) }}
+    env:
+      DEVELOPMENT_INSTANCE_2: ${{ vars.DEVELOPMENT_INSTANCE_2 }}
+      QA_INSTANCE_2: ${{ vars.QA_INSTANCE_2 }}
+      TESTING_INSTANCE_2: ${{ vars.TESTING_INSTANCE_2 }}
+      PRODUCTION_INSTANCE_2: ${{ vars.PRODUCTION_INSTANCE_2 }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: SplitSmarter/ci-cd-workflows
+          ref: main
+          path: ci-cd-workflows
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Preflight secrets file present + docker
+        working-directory: ci-cd-workflows
+        run: |
+          set -euo pipefail
+          chmod +x deploy/scripts/*.sh deploy/droplet/*.sh
+          INSTANCE_NAME="${{ matrix.instance_name }}"
+          DEPLOY_PATH="${{ needs.resolve-target.outputs.deploy_path }}"
+          SERVICE_NAME="${{ needs.resolve-target.outputs.service_name }}"
+          echo "==> preflight INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME} DEPLOY_PATH=${DEPLOY_PATH}"
+
+          ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
+          # shellcheck source=deploy/scripts/prepare_ssh.sh
+          source deploy/scripts/prepare_ssh.sh
+          prepare_ssh /tmp/instance.env
+          prepare_ssh_verify_connectivity
+
+          echo "==> ensure check-host + validate-env on host"
+          remote_mkdir_deploy "$DEPLOY_PATH"
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/check-host.sh \
+            deploy/droplet/validate-env.sh \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/" \
+            || { echo "ERROR: failed to copy preflight scripts to host" >&2; exit 1; }
+          ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "chmod +x '${DEPLOY_PATH}/scripts/check-host.sh' '${DEPLOY_PATH}/scripts/validate-env.sh'"
+
+          echo "==> ensure env/${SERVICE_NAME}.env"
+          ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "mkdir -p '${DEPLOY_PATH}/env' && if [ ! -s '${DEPLOY_PATH}/env/${SERVICE_NAME}.env' ]; then printf '%s\n' 'APP_NAME=${SERVICE_NAME}' > '${DEPLOY_PATH}/env/${SERVICE_NAME}.env'; chmod 600 '${DEPLOY_PATH}/env/${SERVICE_NAME}.env'; fi"
+
+          echo "==> checking secrets file present env/${SERVICE_NAME}.env"
+          if ! ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "export DEPLOY_PATH='${DEPLOY_PATH}'; '${DEPLOY_PATH}/scripts/validate-env.sh' '${SERVICE_NAME}'"; then
+            echo "ERROR: Preflight secrets file missing for INSTANCE_NAME=${INSTANCE_NAME}." >&2
+            exit 1
+          fi
+
+          EDGE_PATH="${{ needs.resolve-target.outputs.edge_path }}"
+          CHECK_FLAGS=(--require-env "$SERVICE_NAME")
+          if [[ -n "$EDGE_PATH" ]]; then
+            CHECK_FLAGS+=(--require-edge "$EDGE_PATH")
+          fi
+          echo "==> host readiness (docker + secrets + nginx edge)"
+          if ! remote_check_host "$DEPLOY_PATH" "${CHECK_FLAGS[@]}"; then
+            echo "ERROR: Preflight host checks failed for INSTANCE_NAME=${INSTANCE_NAME}." >&2
+            echo "On the website droplet as root: bootstrap, then EDGE_PROFILE=site bash ensure-edge.sh." >&2
+            exit 1
+          fi
+          echo "ok preflight INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME}"
+
+  deploy:
+    needs: [resolve-target, build-and-push, preflight-secrets]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        instance_name: ${{ fromJson(needs.resolve-target.outputs.instance_names) }}
+    env:
+      DEVELOPMENT_INSTANCE_2: ${{ vars.DEVELOPMENT_INSTANCE_2 }}
+      QA_INSTANCE_2: ${{ vars.QA_INSTANCE_2 }}
+      TESTING_INSTANCE_2: ${{ vars.TESTING_INSTANCE_2 }}
+      PRODUCTION_INSTANCE_2: ${{ vars.PRODUCTION_INSTANCE_2 }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: SplitSmarter/ci-cd-workflows
+          ref: main
+          path: ci-cd-workflows
+
+      - name: Deploy service
+        working-directory: ci-cd-workflows
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -euo pipefail
+          chmod +x deploy/scripts/*.sh deploy/droplet/*.sh
+          INSTANCE_NAME="${{ matrix.instance_name }}"
+          DEPLOY_PATH="${{ needs.resolve-target.outputs.deploy_path }}"
+          SERVICE_NAME="${{ needs.resolve-target.outputs.service_name }}"
+          SERVICE="${{ needs.resolve-target.outputs.compose_service }}"
+          IMAGE="${{ needs.build-and-push.outputs.image_ref }}"
+          PORT="${{ needs.resolve-target.outputs.container_port }}"
+          HEALTH="${{ needs.resolve-target.outputs.health_path }}"
+          EDGE_PATH="${{ needs.resolve-target.outputs.edge_path }}"
+          echo "==> deploy INSTANCE_NAME=${INSTANCE_NAME} SERVICE_NAME=${SERVICE_NAME} IMAGE=${IMAGE} EDGE_PATH=${EDGE_PATH}"
+
+          ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
+          # shellcheck source=deploy/scripts/prepare_ssh.sh
+          source deploy/scripts/prepare_ssh.sh
+          prepare_ssh /tmp/instance.env
+          prepare_ssh_verify_connectivity
+          CHECK_FLAGS=(--require-env "$SERVICE_NAME")
+          if [[ -n "$EDGE_PATH" ]]; then
+            CHECK_FLAGS+=(--require-edge "$EDGE_PATH")
+          fi
+          remote_check_host "$DEPLOY_PATH" "${CHECK_FLAGS[@]}"
+
+          echo "==> copy deploy artifacts"
+          remote_mkdir_deploy "$DEPLOY_PATH"
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/deploy-service.sh \
+            deploy/droplet/check-host.sh \
+            deploy/droplet/validate-env.sh \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/" \
+            || { echo "ERROR: scp scripts failed" >&2; exit 1; }
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/docker-compose.yml \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/docker-compose.yml" \
+            || { echo "ERROR: scp docker-compose.yml failed" >&2; exit 1; }
+
+          echo "==> remote deploy compose_service=${SERVICE} image=${IMAGE}"
+          ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "export DEPLOY_PATH='${DEPLOY_PATH}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN='${GHCR_TOKEN}' EDGE_PATH='${EDGE_PATH}'; \
+             chmod +x '${DEPLOY_PATH}/scripts/deploy-service.sh' '${DEPLOY_PATH}/scripts/check-host.sh' '${DEPLOY_PATH}/scripts/validate-env.sh'; \
+             '${DEPLOY_PATH}/scripts/deploy-service.sh' '${SERVICE}' '${IMAGE}' '${PORT}' '${HEALTH}' '${EDGE_PATH}'" \
+            || { echo "ERROR: deploy-service.sh failed for INSTANCE_NAME=${INSTANCE_NAME}" >&2; exit 1; }
+
+          echo "ok deployed SERVICE_NAME=${SERVICE_NAME} to INSTANCE_NAME=${INSTANCE_NAME}"
