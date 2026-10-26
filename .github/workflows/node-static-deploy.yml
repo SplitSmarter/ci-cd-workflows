@@ -303,6 +303,11 @@ jobs:
             deploy/droplet/docker-compose.yml \
             "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/docker-compose.yml" \
             || { echo "ERROR: scp docker-compose.yml failed" >&2; exit 1; }
+          ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${DEPLOY_PATH}/alloy'"
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/alloy/config.alloy \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/alloy/config.alloy" \
+            || { echo "ERROR: scp alloy config failed" >&2; exit 1; }
 
           echo "==> remote deploy compose_service=${SERVICE} image=${IMAGE}"
           ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \

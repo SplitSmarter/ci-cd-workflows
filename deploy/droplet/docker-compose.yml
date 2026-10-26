@@ -5,6 +5,11 @@ services:
     ports:
       - "127.0.0.1:8083:8083"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8083/health"]
       interval: 15s
@@ -22,6 +27,11 @@ services:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
     mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 15s
@@ -35,10 +45,33 @@ services:
     ports:
       - "127.0.0.1:8084:80"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1/health"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  alloy:
+    image: grafana/alloy:latest
+    env_file: env/alloy.env
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 

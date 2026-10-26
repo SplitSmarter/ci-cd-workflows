@@ -1,0 +1,53 @@
+// Tails Docker container stdout and ships JSON logs to Grafana Cloud Loki.
+// Credentials come from env/alloy.env (GRAFANA_CLOUD_LOKI_URL, USER, TOKEN).
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "drop_self" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/.*alloy.*"
+    action        = "drop"
+  }
+}
+
+loki.source.docker "default" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.drop_self.output
+  forward_to = [loki.process.json_logs.receiver]
+}
+
+loki.process "json_logs" {
+  stage.json {
+    expressions = {
+      level    = "level",
+      service  = "service",
+      trace_id = "trace_id",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level    = "",
+      service  = "",
+      trace_id = "",
+    }
+  }
+
+  forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+loki.write "grafana_cloud" {
+  endpoint {
+    url = sys.env("GRAFANA_CLOUD_LOKI_URL")
+
+    basic_auth {
+      username = sys.env("GRAFANA_CLOUD_LOKI_USER")
+      password = sys.env("GRAFANA_CLOUD_LOKI_TOKEN")
+    }
+  }
+}
