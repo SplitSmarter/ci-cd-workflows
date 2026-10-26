@@ -122,5 +122,18 @@ if [[ -n "$EDGE_PATH" ]]; then
   fi
 fi
 
+# Alloy ships container stdout. Start it after the app is up when this host has credentials.
+# Hosts without a synced env file (for example the website droplet) skip this.
+ALLOY_ENV="${ROOT}/env/alloy.env"
+ALLOY_CFG="${ROOT}/alloy/config.alloy"
+if [[ "$SERVICE" == "alloy" ]]; then
+  echo "skip alloy ensure; this deploy is alloy"
+elif [[ ! -s "$ALLOY_ENV" || ! -f "$ALLOY_CFG" ]]; then
+  echo "WARN: ${ALLOY_ENV} or ${ALLOY_CFG} missing; skipping alloy"
+else
+  step "ensure alloy"
+  docker compose up -d --no-deps alloy || fail "compose up failed for alloy"
+fi
+
 echo "ok deploy ${SERVICE}"
 exit 0
