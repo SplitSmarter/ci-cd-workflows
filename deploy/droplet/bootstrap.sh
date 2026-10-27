@@ -124,15 +124,20 @@ EOF
   systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 fi
 
-echo "==> installing nginx edge (path routes, UFW 80)"
+EDGE_PROFILE="${EDGE_PROFILE:-api}"
+echo "==> installing nginx edge (EDGE_PROFILE=${EDGE_PROFILE})"
 chmod +x "${SCRIPT_DIR}/ensure-edge.sh" || true
-bash "${SCRIPT_DIR}/ensure-edge.sh"
+EDGE_PROFILE="$EDGE_PROFILE" bash "${SCRIPT_DIR}/ensure-edge.sh"
 
 echo ""
 echo "Bootstrap complete (startup step 1/2)."
 echo "  DEPLOY_PATH=${ROOT}  owner=${DEPLOY_USER}:${DEPLOY_USER}"
 echo "  STAGING_DIR=${STAGING_DIR}  owner=${DEPLOY_USER}:${DEPLOY_USER} (scp edge kit here)"
-echo "  edge: nginx /mail/ → 127.0.0.1:8083 (containers stay localhost-only)"
+if [[ "$EDGE_PROFILE" == "site" ]]; then
+  echo "  edge: nginx / → 127.0.0.1:8084 (containers stay localhost-only)"
+else
+  echo "  edge: nginx /mail/ → 127.0.0.1:8083, /forex/ → 127.0.0.1:8093 (containers stay localhost-only)"
+fi
 echo ""
 echo "Next: run GitHub Action sync-host-secrets, then app deploy."
 echo "Prefer Managed Postgres in the same VPC; never expose 5432 or 8083 publicly."

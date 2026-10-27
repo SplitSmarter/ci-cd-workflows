@@ -26,6 +26,7 @@ Org **Secrets** (registry only for v1):
 /opt/splitsmarter/
   docker-compose.yml
   env/mail-service.env     # sync-host-secrets output (mode 600)
+  env/forex-services.env
   scripts/sync-env.sh
   scripts/validate-env.sh  # presence-only check for env/<service>.env
   scripts/check-host.sh
@@ -38,6 +39,7 @@ Nginx edge (installed by bootstrap / `ensure-edge.sh`, not under `/opt`):
 /etc/nginx/sites-available/splitsmarter
 /etc/nginx/splitsmarter.d/gateway.conf        # location / → 127.0.0.1:8080
 /etc/nginx/splitsmarter.d/mail-service.conf   # location /mail/ → 127.0.0.1:8083
+/etc/nginx/splitsmarter.d/forex-services.conf # location /forex/ → 127.0.0.1:8093
 ```
 
 **Secrets policy:** CI does **not** enumerate keys from [`required-secrets.yml`](required-secrets.yml). Sync writes the full APPSECRET body; deploy only checks that `env/<service>.env` exists and is non-empty.
@@ -46,7 +48,7 @@ Nginx edge (installed by bootstrap / `ensure-edge.sh`, not under `/opt`):
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| [`sync-host-secrets.yml`](../.github/workflows/sync-host-secrets.yml) | `workflow_dispatch` / `workflow_call` | APPSECRET → `env/<service>.env` (no Docker required) |
+| [`sync-host-secrets.yml`](../.github/workflows/sync-host-secrets.yml) | `workflow_dispatch` / `workflow_call` | APPSECRET → `env/<service>.env`. `service_name` is a dropdown of completed pipelines (`mail-service`, `forex-services`, `gateway`, `main-website`) |
 | [`python-docker-deploy.yml`](../.github/workflows/python-docker-deploy.yml) | `workflow_call` | Python → GHCR → compose + edge health |
 | [`java-docker-deploy.yml`](../.github/workflows/java-docker-deploy.yml) | `workflow_call` | Java/Maven → GHCR → compose + edge health |
 
@@ -73,7 +75,7 @@ Prerequisite: Droplet has the **`deploy` user** and your SSH public key in `/hom
 2) scp edge kit (Windows → deploy)    → bootstrap.sh + ensure-edge.sh + nginx/
 3) bootstrap.sh (root)                → Docker, /opt/splitsmarter, nginx edge, UFW
 4) sync-host-secrets (CI)             → scripts + env/<service>.env
-5) app deploy (CI)                    → compose up + localhost + /mail/ health
+5) app deploy (CI)                    → compose up + localhost + /mail/ and /forex/ health
 ```
 
 `/opt/splitsmarter` is the default app root. Override with `DEPLOY_PATH` in the INSTANCE Variable / inventory.
@@ -168,20 +170,20 @@ From Windows with root SSH:
 ssh -i $env:USERPROFILE\.ssh\dev_instance_1 root@YOUR.DROPLET.IP "cd /tmp/deploy && bash bootstrap.sh"
 ```
 
-Bootstrap **requires** `ensure-edge.sh` + `nginx/` next to `bootstrap.sh` (fails if missing). Installs Docker + Compose, `/opt/splitsmarter/{scripts,env}` owned by `deploy`, nginx `/mail/` → `127.0.0.1:8083`, UFW 22/80/443 (not 8083). Keeps `/tmp/deploy` owned by `deploy` for later uploads.
+Bootstrap **requires** `ensure-edge.sh` + `nginx/` next to `bootstrap.sh` (fails if missing). Installs Docker + Compose, `/opt/splitsmarter/{scripts,env}` owned by `deploy`, nginx `/mail/` → `127.0.0.1:8083` and `/forex/` → `127.0.0.1:8093`, UFW 22/80/443 (not 8083 or 8093). Keeps `/tmp/deploy` owned by `deploy` for later uploads.
 
 ### 4) sync-host-secrets (CI)
 
 In **ci-cd-workflows**, run workflow **Sync Host Secrets**:
 
 - `environment` = `development` (or qa / testing / production)
-- `service_name` = `mail-service`
+- `service_name` = one of the dropdown values (`mail-service`, `forex-services`, `gateway`, `main-website`)
 
-This uploads host scripts and writes `/opt/splitsmarter/env/mail-service.env` as `deploy`. Do this before the first app deploy (and again when APPSECRET changes).
+This uploads host scripts and writes `/opt/splitsmarter/env/<service>.env` as `deploy` (for example `env/mail-service.env` or `env/forex-services.env`). Do this before the first app deploy (and again when APPSECRET changes). Forex uses `{ENV}_APPSECRET_FOREXSERVICES`.
 
 ### 5) app deployment (CI)
 
-Push / run the app repo pipeline (e.g. `mail-service` → `python-docker-deploy.yml`). It preflights secrets file + Docker + nginx, then compose up. Health: `http://127.0.0.1:8083/health` and `http://127.0.0.1/mail/health`.
+Push / run the app repo pipeline (e.g. `mail-service` or `forex-services` → `python-docker-deploy.yml`). It preflights secrets file + Docker + nginx, then compose up. Health: `http://127.0.0.1:8083/health` and `http://127.0.0.1/mail/health` for mail; `http://127.0.0.1:8093/health` and `http://127.0.0.1/forex/health` for forex. On an API droplet that was bootstrapped before `/forex/` existed, re-run `ensure-edge.sh` as root before the first forex deploy so the nginx check can pass.
 
 ### Org Variable examples
 
@@ -210,6 +212,18 @@ MAILERSEND_API_KEY=...
 MAIL_DATABASE_URL=postgresql+asyncpg://user:pass@PRIVATE_HOST:25060/mail_forex_geo
 ```
 
+**`DEVELOPMENT_APPSECRET_FOREXSERVICES`** (example)
+
+```text
+APP_NAME=forex-service
+ENV=prod
+FOREX_DATABASE_URL=postgresql+asyncpg://user:pass@PRIVATE_HOST:25060/mail_forex_geo
+CURRENCYLAYER_ACCESS_KEY=...
+EXCHANGERATE_ACCESS_KEY=...
+RATE_REFRESH_INTERVAL_HOURS=1
+ENABLE_DB_SCHEMA_INIT=true
+```
+
 ## SSH hardening
 
 - Key-only auth for `deploy` (bootstrap sets `PasswordAuthentication no` when `HARDEN_SSH=1`).
@@ -226,6 +240,7 @@ Containers bind localhost only. **Nginx** on the Droplet terminates public **80*
 |------|----------|
 | `/` | `127.0.0.1:8080` (gateway catch-all) |
 | `/mail/` | `127.0.0.1:8083` (prefix stripped) |
+| `/forex/` | `127.0.0.1:8093` (prefix stripped) |
 
 Configs live in [`droplet/nginx/`](droplet/nginx/). After adding/changing locations, refresh as root:
 
@@ -237,7 +252,7 @@ sudo bash ensure-edge.sh
 **What deploy checks (per service with `edge_path` in inventory):**
 
 1. **Preflight / check-host:** nginx is active; soft-warn if UFW has no `80/tcp` rule visible.
-2. **After compose up:** direct localhost health, then edge (`http://127.0.0.1/health` for gateway, `http://127.0.0.1/mail/health` for mail).
+2. **After compose up:** direct localhost health, then edge (`http://127.0.0.1/health` for gateway, `http://127.0.0.1/mail/health` for mail, `http://127.0.0.1/forex/health` for forex).
 
 CI cannot reconfigure UFW (needs root). If edge checks fail, re-run `ensure-edge.sh` as root. Keep DO Cloud Firewall on 22/80/443 (**not** 8080/8083).
 

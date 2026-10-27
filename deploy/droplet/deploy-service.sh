@@ -45,6 +45,7 @@ cd "$ROOT" || fail "cannot cd to ${ROOT}"
 # Map compose service → image env var used in docker-compose.yml
 case "$SERVICE" in
   mail-service) export MAIL_IMAGE="$IMAGE" ;;
+  forex-services) export FOREX_IMAGE="$IMAGE" ;;
   gateway) export GATEWAY_IMAGE="$IMAGE" ;;
   main-website) export MAIN_WEBSITE_IMAGE="$IMAGE" ;;
   *) fail "no image env mapping for compose service '${SERVICE}' (add case in deploy-service.sh)" ;;
@@ -120,6 +121,19 @@ if [[ -n "$EDGE_PATH" ]]; then
   if [[ "$edge_ok" -ne 1 ]]; then
     fail "nginx edge check failed for ${EDGE_URL}. As root: sudo bash ensure-edge.sh (installs nginx + UFW 80). Do not expose port ${PORT} publicly."
   fi
+fi
+
+# Alloy ships container stdout. Start it after the app is up when this host has credentials.
+# Hosts without a synced env file (for example the website droplet) skip this.
+ALLOY_ENV="${ROOT}/env/alloy.env"
+ALLOY_CFG="${ROOT}/alloy/config.alloy"
+if [[ "$SERVICE" == "alloy" ]]; then
+  echo "skip alloy ensure; this deploy is alloy"
+elif [[ ! -s "$ALLOY_ENV" || ! -f "$ALLOY_CFG" ]]; then
+  echo "WARN: ${ALLOY_ENV} or ${ALLOY_CFG} missing; skipping alloy"
+else
+  step "ensure alloy"
+  docker compose up -d --no-deps alloy || fail "compose up failed for alloy"
 fi
 
 echo "ok deploy ${SERVICE}"
