@@ -26,14 +26,14 @@ def ps_quote(value: str) -> str:
     return '"' + value.replace('"', '`"') + '"'
 
 
-def load_services(inventory: Path, env: str, instance_id: str) -> list[str]:
-    """Services in instances.yml whose target_ids include this instance. Empty if YAML is unavailable."""
+def load_services(inventory: Path, env: str, instance_id: str) -> tuple[list[str], str]:
+    """Services on this instance, and nginx profile: site for main-website only, otherwise api."""
     try:
         import yaml
     except ImportError:
-        return []
+        return [], "api"
     if not inventory.is_file():
-        return []
+        return [], "api"
     data = yaml.safe_load(inventory.read_text(encoding="utf-8")) or {}
     block = (data.get("instances") or {}).get(env) or {}
     targets = block.get("targets") or []
@@ -49,7 +49,8 @@ def load_services(inventory: Path, env: str, instance_id: str) -> list[str]:
         ids = {str(i) for i in (spec.get("target_ids") or [])}
         if instance_id in ids:
             names.append(name)
-    return names
+    profile = "site" if names == ["main-website"] else "api"
+    return names, profile
 
 
 def step(n: int, where: str, why: str, body: str) -> str:
@@ -89,8 +90,17 @@ def main() -> int:
         pub_line = "ssh-ed25519 AAAA...comment"
         pub_note = f"MISSING {pub} - replace the echo line with that .pub file (one line)"
 
-    services = load_services(inventory, args.env, instance_id)
+    services, edge_profile = load_services(inventory, args.env, instance_id)
     service_lines = "\n".join(f"  - {name}" for name in services) if services else "  - (install PyYAML to list services from instances.yml)"
+    bootstrap_cmd = "bash bootstrap.sh" if edge_profile == "api" else "EDGE_PROFILE=site bash bootstrap.sh"
+    bootstrap_why = (
+        "Installs Docker, nginx, and UFW. Must be root. Do not run this as deploy. "
+        + (
+            "EDGE_PROFILE=site sends / to the website container on 127.0.0.1:8084."
+            if edge_profile == "site"
+            else "Default api profile sends /mail/ to 8083, /forex/ to 8093, and / to the gateway on 8080."
+        )
+    )
 
     prepare = droplet_dir / "prepare-staging.sh"
     bootstrap = droplet_dir / "bootstrap.sh"
@@ -156,8 +166,8 @@ def main() -> int:
         step(
             6,
             "Windows PowerShell - run bootstrap as root",
-            "Installs Docker, nginx, and UFW. Must be root. Do not run this as deploy.",
-            f'ssh -i {key_ps} {root} "cd /tmp/deploy && bash bootstrap.sh"',
+            bootstrap_why,
+            f'ssh -i {key_ps} {root} "cd /tmp/deploy && {bootstrap_cmd}"',
         ),
         step(
             7,

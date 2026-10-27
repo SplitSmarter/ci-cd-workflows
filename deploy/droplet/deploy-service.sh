@@ -45,6 +45,7 @@ cd "$ROOT" || fail "cannot cd to ${ROOT}"
 # Map compose service → image env var used in docker-compose.yml
 case "$SERVICE" in
   mail-service) export MAIL_IMAGE="$IMAGE" ;;
+  forex-services) export FOREX_IMAGE="$IMAGE" ;;
   gateway) export GATEWAY_IMAGE="$IMAGE" ;;
   main-website) export MAIN_WEBSITE_IMAGE="$IMAGE" ;;
   *) fail "no image env mapping for compose service '${SERVICE}' (add case in deploy-service.sh)" ;;

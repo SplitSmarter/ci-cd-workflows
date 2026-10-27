@@ -84,5 +84,6 @@ echo "ok ensure-edge: profile ${EDGE_PROFILE}"
 if [[ "$EDGE_PROFILE" == "site" ]]; then
   echo "   http://<host>/ → 127.0.0.1:8084"
 else
-  echo "   http://<host>/mail/ → 127.0.0.1:8083 (API profile skips main-website.conf)"
+  echo "   http://<host>/mail/ → 127.0.0.1:8083"
+  echo "   http://<host>/forex/ → 127.0.0.1:8093 (API profile skips main-website.conf)"
 fi
