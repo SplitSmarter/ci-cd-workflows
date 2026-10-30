@@ -45,9 +45,12 @@ chmod -R a+rX "$DEST"
 check_guide() {
   local url="$1"
   local body
-  body="$(curl -fsS "$url")" || fail "request failed: ${url}"
-  printf '%s' "$body" | grep -q '/guide/_next/' \
-    || fail "${url} did not serve the user guide (missing /guide/_next/)"
+  body="$(curl -fsS --compressed "$url")" || fail "request failed: ${url}"
+  # Do not pipe this into grep -q. With pipefail, grep exits at the first match
+  # and the writer gets SIGPIPE, which fails the check even when the page is served.
+  if [[ "$body" != *'/guide/_next/'* ]]; then
+    fail "${url} did not serve the user guide (missing /guide/_next/)"
+  fi
   echo "ok ${url}"
 }
 
