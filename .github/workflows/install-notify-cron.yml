@@ -1,0 +1,109 @@
+name: Install Notify Cron
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Logical env
+        required: true
+        type: choice
+        options:
+          - development
+          - qa
+          - testing
+          - production
+      instance_id:
+        description: Droplet that gets the cron and holds the contacts file
+        required: true
+        type: string
+      mail_instance_id:
+        description: Droplet where mail-service is deployed
+        required: true
+        type: string
+      cron_schedule:
+        description: Five-field cron schedule (default is daily at 00:00)
+        required: false
+        type: string
+        default: "0 0 * * *"
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    env:
+      DEVELOPMENT_INSTANCE_1: ${{ vars.DEVELOPMENT_INSTANCE_1 }}
+      QA_INSTANCE_1: ${{ vars.QA_INSTANCE_1 }}
+      TESTING_INSTANCE_1: ${{ vars.TESTING_INSTANCE_1 }}
+      PRODUCTION_INSTANCE_1: ${{ vars.PRODUCTION_INSTANCE_1 }}
+      DEVELOPMENT_INSTANCE_2: ${{ vars.DEVELOPMENT_INSTANCE_2 }}
+      QA_INSTANCE_2: ${{ vars.QA_INSTANCE_2 }}
+      TESTING_INSTANCE_2: ${{ vars.TESTING_INSTANCE_2 }}
+      PRODUCTION_INSTANCE_2: ${{ vars.PRODUCTION_INSTANCE_2 }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+
+      - name: Install notify cron
+        run: |
+          set -euo pipefail
+          chmod +x deploy/scripts/*.sh deploy/droplet/*.sh
+
+          ENVIRONMENT="${{ inputs.environment }}"
+          INSTANCE_ID="${{ inputs.instance_id }}"
+          MAIL_INSTANCE_ID="${{ inputs.mail_instance_id }}"
+          SCHEDULE="${{ inputs.cron_schedule }}"
+
+          if [[ ! "$INSTANCE_ID" =~ ^[0-9]+$ || ! "$MAIL_INSTANCE_ID" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: instance_id and mail_instance_id must be numbers" >&2
+            exit 1
+          fi
+          if [[ -z "$SCHEDULE" ]]; then
+            SCHEDULE="0 0 * * *"
+          fi
+          if [[ ! "$SCHEDULE" =~ ^[0-9*/,-]+([[:space:]]+[0-9*/,-]+){4}$ ]]; then
+            echo "ERROR: cron_schedule must be five cron fields" >&2
+            exit 1
+          fi
+
+          ENV_NAME="$(printf '%s' "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')"
+          CRON_VAR="${ENV_NAME}_INSTANCE_${INSTANCE_ID}"
+          MAIL_VAR="${ENV_NAME}_INSTANCE_${MAIL_INSTANCE_ID}"
+          echo "==> notify cron env=${ENVIRONMENT} instance=${INSTANCE_ID} mail_instance=${MAIL_INSTANCE_ID} schedule=${SCHEDULE}"
+
+          ./deploy/scripts/load_payload.sh "$CRON_VAR" /tmp/cron.env
+          ./deploy/scripts/load_payload.sh "$MAIL_VAR" /tmp/mail.env
+
+          # shellcheck source=deploy/scripts/parse_kv.sh
+          source deploy/scripts/parse_kv.sh
+          parse_kv_file /tmp/mail.env
+          MAIL_HOST="${SSH_HOST:-}"
+          unset SSH_HOST SSH_USER SSH_PORT SSH_KEY DEPLOY_PATH || true
+
+          if [[ "$INSTANCE_ID" == "$MAIL_INSTANCE_ID" ]]; then
+            MAIL_URL="http://127.0.0.1:8083/notify"
+          else
+            if [[ -z "$MAIL_HOST" ]]; then
+              echo "ERROR: mail instance payload is missing SSH_HOST" >&2
+              exit 1
+            fi
+            MAIL_URL="http://${MAIL_HOST}/mail/notify"
+          fi
+          echo "==> mail url ${MAIL_URL}"
+
+          # shellcheck source=deploy/scripts/prepare_ssh.sh
+          source deploy/scripts/prepare_ssh.sh
+          prepare_ssh /tmp/cron.env
+          prepare_ssh_verify_connectivity
+          remote_mkdir_deploy "$DEPLOY_PATH"
+
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/notify-mail.sh \
+            deploy/droplet/install-notify-cron.sh \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/" \
+            || { echo "ERROR: scp notify cron scripts failed" >&2; exit 1; }
+          ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "export DEPLOY_PATH='${DEPLOY_PATH}'; \
+             chmod +x '${DEPLOY_PATH}/scripts/notify-mail.sh' '${DEPLOY_PATH}/scripts/install-notify-cron.sh'; \
+             '${DEPLOY_PATH}/scripts/install-notify-cron.sh' '${MAIL_URL}' '${SCHEDULE}'" \
+            || { echo "ERROR: install-notify-cron.sh failed" >&2; exit 1; }
+
+          echo "ok notify cron on ${CRON_VAR}"

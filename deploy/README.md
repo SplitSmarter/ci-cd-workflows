@@ -52,6 +52,7 @@ Nginx edge (installed by bootstrap / `ensure-edge.sh`, not under `/opt`):
 | [`python-docker-deploy.yml`](../.github/workflows/python-docker-deploy.yml) | `workflow_call` | Python → GHCR → compose + edge health |
 | [`java-docker-deploy.yml`](../.github/workflows/java-docker-deploy.yml) | `workflow_call` | Java/Maven → GHCR → compose + edge health |
 | [`static-dir-deploy.yml`](../.github/workflows/static-dir-deploy.yml) | `workflow_call` | Static export uploaded into the main-website container mount (`/opt/splitsmarter/guide`). No image and no secrets file. |
+| [`install-notify-cron.yml`](../.github/workflows/install-notify-cron.yml) | `workflow_dispatch` | Installs one notify cron on a chosen droplet. The default schedule is daily at 00:00. Re-running replaces that cron. The job posts new lines from `data/notify/contacts.jsonl` to mail-service and skips the call when the file is missing. |
 
 App repos (e.g. `mail-service`) only need a thin caller:
 
