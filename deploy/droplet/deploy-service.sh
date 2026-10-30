@@ -81,6 +81,9 @@ if [[ "$SERVICE" == "main-website" ]]; then
   step "ensure guide mount dir ${ROOT}/guide"
   mkdir -p "${ROOT}/guide" || fail "cannot create ${ROOT}/guide"
   [[ -w "${ROOT}/guide" ]] || fail "${ROOT}/guide is not writable by $(id -un). On the host as root: chown -R ${SSH_USER:-$(id -un)}:${SSH_USER:-$(id -un)} ${ROOT}/guide"
+  step "ensure notify mount dir ${ROOT}/data/notify"
+  mkdir -p "${ROOT}/data/notify" || fail "cannot create ${ROOT}/data/notify"
+  [[ -w "${ROOT}/data/notify" ]] || fail "${ROOT}/data/notify is not writable by $(id -un). On the host as root: chown -R ${SSH_USER:-$(id -un)}:${SSH_USER:-$(id -un)} ${ROOT}/data/notify"
 fi
 
 step "docker compose up ${SERVICE}"
