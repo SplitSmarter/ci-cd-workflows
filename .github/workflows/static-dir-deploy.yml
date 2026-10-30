@@ -1,0 +1,149 @@
+name: Static Dir Deploy
+
+on:
+  workflow_call:
+    inputs:
+      branch_name:
+        required: true
+        type: string
+      service_name:
+        required: true
+        type: string
+      project_root:
+        required: false
+        type: string
+        default: "."
+      content_dir:
+        required: false
+        type: string
+        default: guide
+
+jobs:
+  resolve-target:
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.resolve.outputs.env }}
+      service_name: ${{ steps.resolve.outputs.service_name }}
+      container_port: ${{ steps.resolve.outputs.container_port }}
+      health_path: ${{ steps.resolve.outputs.health_path }}
+      deploy_path: ${{ steps.resolve.outputs.deploy_path }}
+      instance_names: ${{ steps.resolve.outputs.instance_names }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: SplitSmarter/ci-cd-workflows
+          ref: main
+          path: ci-cd-workflows
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Resolve targets
+        id: resolve
+        working-directory: ci-cd-workflows
+        run: |
+          python deploy/scripts/resolve_target.py \
+            --inventory deploy/instances.yml \
+            --branch-name "${{ inputs.branch_name }}" \
+            --service-name "${{ inputs.service_name }}" \
+            --github-output
+
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.project_root }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ inputs.project_root }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Export static site
+        run: npm run build:export
+
+      - name: Pack export
+        run: tar -C out -czf static-export.tgz .
+
+      - name: Upload export
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-export
+          path: ${{ inputs.project_root }}/static-export.tgz
+          if-no-files-found: error
+
+  deploy:
+    needs: [resolve-target, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        instance_name: ${{ fromJson(needs.resolve-target.outputs.instance_names) }}
+    env:
+      DEVELOPMENT_INSTANCE_2: ${{ vars.DEVELOPMENT_INSTANCE_2 }}
+      QA_INSTANCE_2: ${{ vars.QA_INSTANCE_2 }}
+      TESTING_INSTANCE_2: ${{ vars.TESTING_INSTANCE_2 }}
+      PRODUCTION_INSTANCE_2: ${{ vars.PRODUCTION_INSTANCE_2 }}
+    steps:
+      - name: Checkout ci-cd-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: SplitSmarter/ci-cd-workflows
+          ref: main
+          path: ci-cd-workflows
+
+      - name: Download export
+        uses: actions/download-artifact@v4
+        with:
+          name: static-export
+          path: static-export
+
+      - name: Upload static files
+        working-directory: ci-cd-workflows
+        run: |
+          set -euo pipefail
+          chmod +x deploy/scripts/*.sh deploy/droplet/*.sh
+          INSTANCE_NAME="${{ matrix.instance_name }}"
+          DEPLOY_PATH="${{ needs.resolve-target.outputs.deploy_path }}"
+          PORT="${{ needs.resolve-target.outputs.container_port }}"
+          HEALTH="${{ needs.resolve-target.outputs.health_path }}"
+          CONTENT_DIR="${{ inputs.content_dir }}"
+          echo "==> static deploy INSTANCE_NAME=${INSTANCE_NAME} DEST=${DEPLOY_PATH}/${CONTENT_DIR} HEALTH=${HEALTH}"
+
+          ./deploy/scripts/load_payload.sh "$INSTANCE_NAME" /tmp/instance.env
+          # shellcheck source=deploy/scripts/prepare_ssh.sh
+          source deploy/scripts/prepare_ssh.sh
+          prepare_ssh /tmp/instance.env
+          prepare_ssh_verify_connectivity
+          remote_mkdir_deploy "$DEPLOY_PATH"
+
+          scp "${SSH_OPTS[@]}" \
+            deploy/droplet/deploy-static-dir.sh \
+            ../static-export/static-export.tgz \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/scripts/" \
+            || { echo "ERROR: scp static export failed" >&2; exit 1; }
+          ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SSH_HOST}" \
+            "export DEPLOY_PATH='${DEPLOY_PATH}'; \
+             chmod +x '${DEPLOY_PATH}/scripts/deploy-static-dir.sh'; \
+             '${DEPLOY_PATH}/scripts/deploy-static-dir.sh' \
+               '${DEPLOY_PATH}/scripts/static-export.tgz' \
+               '${CONTENT_DIR}' \
+               '${PORT}' \
+               '${HEALTH}'" \
+            || { echo "ERROR: deploy-static-dir.sh failed for INSTANCE_NAME=${INSTANCE_NAME}" >&2; exit 1; }
+
+          echo "ok static deploy SERVICE_NAME=${{ needs.resolve-target.outputs.service_name }} INSTANCE_NAME=${INSTANCE_NAME}"

@@ -54,6 +54,10 @@ instances:
         container_port: 8084
         health_path: /health
         edge_path: /
+      user-guide:
+        target_ids: [2]
+        container_port: 8084
+        health_path: /guide/en/
   qa:
     targets:
       - id: 1
@@ -93,6 +97,10 @@ instances:
         container_port: 8084
         health_path: /health
         edge_path: /
+      user-guide:
+        target_ids: [2]
+        container_port: 8084
+        health_path: /guide/en/
   testing:
     targets:
       - id: 1
@@ -132,6 +140,10 @@ instances:
         container_port: 8084
         health_path: /health
         edge_path: /
+      user-guide:
+        target_ids: [2]
+        container_port: 8084
+        health_path: /guide/en/
   production:
     targets:
       - id: 1
@@ -171,3 +183,7 @@ instances:
         container_port: 8084
         health_path: /health
         edge_path: /
+      user-guide:
+        target_ids: [2]
+        container_port: 8084
+        health_path: /guide/en/

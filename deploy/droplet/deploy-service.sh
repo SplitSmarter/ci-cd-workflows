@@ -77,6 +77,12 @@ fi
 step "docker compose pull ${SERVICE}"
 docker compose pull "$SERVICE" || fail "compose pull failed for ${SERVICE} (${IMAGE})."
 
+if [[ "$SERVICE" == "main-website" ]]; then
+  step "ensure guide mount dir ${ROOT}/guide"
+  mkdir -p "${ROOT}/guide" || fail "cannot create ${ROOT}/guide"
+  [[ -w "${ROOT}/guide" ]] || fail "${ROOT}/guide is not writable by $(id -un). On the host as root: chown -R ${SSH_USER:-$(id -un)}:${SSH_USER:-$(id -un)} ${ROOT}/guide"
+fi
+
 step "docker compose up ${SERVICE}"
 docker compose up -d --no-deps --force-recreate --remove-orphans "$SERVICE" \
   || fail "compose up failed for ${SERVICE}."
