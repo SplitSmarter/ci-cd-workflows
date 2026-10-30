@@ -51,6 +51,7 @@ Nginx edge (installed by bootstrap / `ensure-edge.sh`, not under `/opt`):
 | [`sync-host-secrets.yml`](../.github/workflows/sync-host-secrets.yml) | `workflow_dispatch` / `workflow_call` | APPSECRET → `env/<service>.env`. `service_name` is a dropdown of completed pipelines (`mail-service`, `forex-services`, `gateway`, `main-website`) |
 | [`python-docker-deploy.yml`](../.github/workflows/python-docker-deploy.yml) | `workflow_call` | Python → GHCR → compose + edge health |
 | [`java-docker-deploy.yml`](../.github/workflows/java-docker-deploy.yml) | `workflow_call` | Java/Maven → GHCR → compose + edge health |
+| [`static-dir-deploy.yml`](../.github/workflows/static-dir-deploy.yml) | `workflow_call` | Static export uploaded into the main-website container mount (`/opt/splitsmarter/guide`). No image and no secrets file. |
 
 App repos (e.g. `mail-service`) only need a thin caller:
 

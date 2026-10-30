@@ -60,6 +60,8 @@ services:
   main-website:
     image: ${MAIN_WEBSITE_IMAGE:-ghcr.io/splitsmarter/main-website:production}
     env_file: env/main-website.env
+    volumes:
+      - ./guide:/usr/share/nginx/html/guide:ro
     ports:
       - "127.0.0.1:8084:80"
     restart: unless-stopped

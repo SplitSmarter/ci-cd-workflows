@@ -137,6 +137,9 @@ jobs:
           GUIDE="${GUIDE#\"}"
           API="${API%\"}"
           API="${API#\"}"
+          if [[ -z "$GUIDE" && "${{ inputs.service_name }}" == "main-website" ]]; then
+            GUIDE="/guide"
+          fi
           echo "VITE_GUIDE_URL=${GUIDE}" >> "$GITHUB_ENV"
           echo "VITE_API_URL=${API}" >> "$GITHUB_ENV"
 
